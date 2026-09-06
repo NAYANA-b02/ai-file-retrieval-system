@@ -3,7 +3,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.core.config import settings
 from app.core.database import engine, Base
-from app.routers import health, auth
+from app.routers import health, auth, files
 import app.models  # Ensures models are imported so Base knows about them
 
 # Safely attempt to create database tables on startup
@@ -34,6 +34,7 @@ app.add_middleware(
 # Include Routers
 app.include_router(health.router)
 app.include_router(auth.router)
+app.include_router(files.router)
 
 
 @app.get("/")

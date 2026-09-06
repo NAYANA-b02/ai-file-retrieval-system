@@ -9,3 +9,4 @@ bcrypt
 passlib[bcrypt]
 alembic
 email-validator
+python-multipart
