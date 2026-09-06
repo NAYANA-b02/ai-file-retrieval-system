@@ -1,0 +1,26 @@
+# Python / Virtual Environment
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+
+# Environment & Secrets
+.env
+.env.local
+
+# IDEs & Editors
+.vscode/
+.idea/
+*.swp
+
+# Application Data
+app/data/uploads/*
+!app/data/uploads/.gitkeep
+app/data/indexes/*
+!app/data/indexes/.gitkeep
+
+# OS
+.DS_Store
+Thumbs.db
