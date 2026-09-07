@@ -1,0 +1,1 @@
+PostgreSQL full text search utilizes GIN indexes and tsvector to parse and rank documents efficiently.

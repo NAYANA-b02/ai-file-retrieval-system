@@ -8,6 +8,18 @@ class SemanticSearchRequest(BaseModel):
     top_k: int = Field(default=5, ge=1, le=50, description="Number of results to return (1-50)")
 
 
+class KeywordSearchRequest(BaseModel):
+    query: str = Field(..., description="Keyword search query")
+    top_k: int = Field(default=5, ge=1, le=50, description="Number of results to return (1-50)")
+
+
+class HybridSearchRequest(BaseModel):
+    query: str = Field(..., description="Search query")
+    top_k: int = Field(default=5, ge=1, le=50, description="Number of results to return (1-50)")
+    keyword_weight: Optional[float] = Field(default=0.4, ge=0.0, le=1.0, description="Weight for keyword relevance (0.0 to 1.0)")
+    semantic_weight: Optional[float] = Field(default=0.6, ge=0.0, le=1.0, description="Weight for semantic similarity (0.0 to 1.0)")
+
+
 class SearchResultItem(BaseModel):
     chunk_id: int
     chunk_index: int
@@ -15,6 +27,8 @@ class SearchResultItem(BaseModel):
     file_id: int
     original_filename: str
     similarity_score: float
+    semantic_score: Optional[float] = None
+    keyword_score: Optional[float] = None
     extension: Optional[str] = None
     mime_type: Optional[str] = None
     uploaded_at: Optional[datetime] = None
@@ -24,5 +38,22 @@ class SearchResultItem(BaseModel):
 
 class SemanticSearchResponse(BaseModel):
     query: str
+    search_mode: str = "semantic"
+    total_results: int
+    results: List[SearchResultItem]
+
+
+class KeywordSearchResponse(BaseModel):
+    query: str
+    search_mode: str = "keyword"
+    total_results: int
+    results: List[SearchResultItem]
+
+
+class HybridSearchResponse(BaseModel):
+    query: str
+    search_mode: str = "hybrid"
+    keyword_weight: float = 0.4
+    semantic_weight: float = 0.6
     total_results: int
     results: List[SearchResultItem]

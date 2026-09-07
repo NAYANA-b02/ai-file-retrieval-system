@@ -1,0 +1,1 @@
+Verifying that server filesystem paths are never leaked in search results.

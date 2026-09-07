@@ -1,0 +1,1 @@
+Document for validating audit logging in keyword and hybrid search.
