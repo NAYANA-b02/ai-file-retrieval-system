@@ -1,0 +1,1 @@
+Testing general search endpoint alias for semantic search.

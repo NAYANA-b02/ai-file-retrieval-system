@@ -1,0 +1,1 @@
+Testing custom weights configuration in hybrid search ranking formula.

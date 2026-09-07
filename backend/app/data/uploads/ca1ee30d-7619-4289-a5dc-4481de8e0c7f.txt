@@ -1,0 +1,1 @@
+Classical computing works with binary digital bits.
