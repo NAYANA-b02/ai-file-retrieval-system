@@ -1,0 +1,1 @@
+Plain text extraction with special characters: ü, é, ñ.

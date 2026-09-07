@@ -1,0 +1,1 @@
+Audit verification document content for RAG query logging.

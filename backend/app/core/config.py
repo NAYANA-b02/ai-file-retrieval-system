@@ -31,6 +31,7 @@ class Settings(BaseSettings):
 
     OLLAMA_BASE_URL: str = "http://localhost:11434"
     OLLAMA_MODEL: str = "llama3.2:3b"
+    OLLAMA_TIMEOUT_SECONDS: int = 30
     RAG_SIMILARITY_THRESHOLD: float = 0.35
 
     model_config = SettingsConfigDict(
