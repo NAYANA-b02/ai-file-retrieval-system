@@ -1,0 +1,1 @@
+Classical computing uses binary transistors 0 and 1.
