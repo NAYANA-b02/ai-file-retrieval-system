@@ -18,6 +18,7 @@ class Settings(BaseSettings):
     UPLOAD_DIR: str = "app/data/uploads"
     FAISS_INDEX_DIR: str = "app/data/indexes"
     MAX_UPLOAD_SIZE_MB: int = 10
+    TESSERACT_CMD: str = r"C:\Program Files\Tesseract-OCR\tesseract.exe"
 
     SESSION_COOKIE_NAME: str = "ai_file_retrieval_session"
     SESSION_EXPIRE_HOURS: int = 24

@@ -1,7 +1,7 @@
 import os
 import uuid
 from pathlib import Path
-from typing import Tuple
+from typing import Tuple, Optional
 from sqlalchemy.orm import Session
 from fastapi import HTTPException, status
 from app.core.config import settings
@@ -86,6 +86,31 @@ def persist_file_record(
         text_chunk_count=0
     )
     db.add(file_record)
+    db.commit()
+    db.refresh(file_record)
+    return file_record
+
+
+def update_file_processing_result(
+    db: Session,
+    file_id: int,
+    status: str,
+    extracted_text: Optional[str] = None,
+    error_message: Optional[str] = None
+) -> Optional[File]:
+    """
+    Updates processing_status, extracted_text, and error_message of a File record.
+    """
+    file_record = db.query(File).filter(File.id == file_id).first()
+    if not file_record:
+        return None
+
+    file_record.processing_status = status
+    if extracted_text is not None:
+        file_record.extracted_text = extracted_text
+    if error_message is not None:
+        file_record.error_message = error_message
+
     db.commit()
     db.refresh(file_record)
     return file_record

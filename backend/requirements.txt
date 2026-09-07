@@ -10,3 +10,9 @@ passlib[bcrypt]
 alembic
 email-validator
 python-multipart
+pymupdf
+python-docx
+pytesseract
+Pillow
+sentence-transformers
+numpy

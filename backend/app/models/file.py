@@ -28,6 +28,7 @@ class File(Base):
     # Relationships
     owner = relationship("User", back_populates="files", foreign_keys=[owner_id])
     user = relationship("User", back_populates="files", foreign_keys=[owner_id], overlaps="owner")
+    chunks = relationship("TextChunk", back_populates="file", cascade="all, delete-orphan")
 
     # Compatibility aliases for any existing references
     @property
