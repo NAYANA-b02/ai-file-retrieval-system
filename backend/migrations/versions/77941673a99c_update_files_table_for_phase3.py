@@ -20,9 +20,36 @@ depends_on: Union[str, Sequence[str], None] = None
 
 def upgrade() -> None:
     """Upgrade schema."""
-    # Check existing columns in files table dynamically or alter safely
     conn = op.get_bind()
     inspector = sa.inspect(conn)
+
+    if not inspector.has_table("files"):
+        op.create_table(
+            'files',
+            sa.Column('id', sa.Integer(), nullable=False),
+            sa.Column('owner_id', sa.Integer(), nullable=False),
+            sa.Column('original_filename', sa.String(length=255), nullable=False),
+            sa.Column('stored_filename', sa.String(length=255), nullable=False),
+            sa.Column('file_path', sa.String(length=500), nullable=False),
+            sa.Column('extension', sa.String(length=20), server_default='', nullable=False),
+            sa.Column('mime_type', sa.String(length=100), nullable=False),
+            sa.Column('size', sa.Integer(), nullable=False),
+            sa.Column('uploaded_at', sa.DateTime(timezone=True), nullable=False),
+            sa.Column('extracted_text', sa.Text(), nullable=True),
+            sa.Column('processing_status', sa.String(length=50), server_default='uploaded', nullable=False),
+            sa.Column('error_message', sa.String(length=1000), nullable=True),
+            sa.Column('text_chunk_count', sa.Integer(), server_default='0', nullable=False),
+            sa.ForeignKeyConstraint(['owner_id'], ['users.id'], ondelete='CASCADE'),
+            sa.PrimaryKeyConstraint('id')
+        )
+        op.create_index(op.f('ix_files_id'), 'files', ['id'], unique=False)
+        op.create_index(op.f('ix_files_owner_id'), 'files', ['owner_id'], unique=False)
+        op.create_index(op.f('ix_files_stored_filename'), 'files', ['stored_filename'], unique=True)
+        op.create_index(op.f('ix_files_extension'), 'files', ['extension'], unique=False)
+        op.create_index(op.f('ix_files_processing_status'), 'files', ['processing_status'], unique=False)
+        return
+
+    # Check existing columns in files table dynamically or alter safely
     existing_cols = [c["name"] for c in inspector.get_columns("files")]
 
     if "owner_id" not in existing_cols and "user_id" in existing_cols:
