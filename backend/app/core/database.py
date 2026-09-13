@@ -27,4 +27,4 @@ def check_db_connection() -> dict:
             connection.execute(text("SELECT 1"))
             return {"connected": True, "details": "Database connection successful"}
     except Exception as e:
-        return {"connected": False, "error": str(e)}
+        return {"connected": False, "error": f"Database connection failed: {type(e).__name__}"}

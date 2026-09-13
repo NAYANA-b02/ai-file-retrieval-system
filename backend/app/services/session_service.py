@@ -34,23 +34,25 @@ def create_user_session(
 
 def set_session_cookie(response: Response, session_id: str):
     max_age = settings.SESSION_EXPIRE_HOURS * 3600
+    samesite_val = settings.COOKIE_SAMESITE.lower() if settings.COOKIE_SAMESITE else "lax"
     response.set_cookie(
         key=settings.SESSION_COOKIE_NAME,
         value=session_id,
         max_age=max_age,
         httponly=True,
-        samesite=settings.COOKIE_SAMESITE,
+        samesite=samesite_val,
         secure=settings.COOKIE_SECURE,
         path="/"
     )
 
 
 def clear_session_cookie(response: Response):
+    samesite_val = settings.COOKIE_SAMESITE.lower() if settings.COOKIE_SAMESITE else "lax"
     response.delete_cookie(
         key=settings.SESSION_COOKIE_NAME,
         path="/",
         httponly=True,
-        samesite=settings.COOKIE_SAMESITE,
+        samesite=samesite_val,
         secure=settings.COOKIE_SECURE
     )
 

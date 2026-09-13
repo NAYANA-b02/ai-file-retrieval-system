@@ -2,7 +2,7 @@ import axios from 'axios';
 
 // Create a centralized Axios instance configured for server-side session cookies
 const api = axios.create({
-  baseURL: '/api/v1',
+  baseURL: import.meta.env.VITE_API_BASE_URL || '/api/v1',
   withCredentials: true, // Required for HttpOnly session cookie handling
   headers: {
     'Accept': 'application/json',

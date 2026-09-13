@@ -1,4 +1,5 @@
 from pathlib import Path
+from pydantic import field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 BASE_DIR = Path(__file__).resolve().parent.parent.parent
@@ -12,6 +13,18 @@ class Settings(BaseSettings):
     DEBUG: bool = True
 
     DATABASE_URL: str = "postgresql+psycopg://postgres:postgres@localhost:5432/ai_file_retrieval_db"
+
+    @field_validator("DATABASE_URL", mode="before")
+    @classmethod
+    def normalize_database_url(cls, v: str) -> str:
+        if not v:
+            return v
+        v_str = str(v).strip()
+        if v_str.startswith("postgres://"):
+            return "postgresql+psycopg://" + v_str[len("postgres://"):]
+        if v_str.startswith("postgresql://"):
+            return "postgresql+psycopg://" + v_str[len("postgresql://"):]
+        return v_str
 
     FRONTEND_ORIGIN: str = "http://localhost:5173"
 
