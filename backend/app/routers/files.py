@@ -28,13 +28,17 @@ def _process_file_in_background(file_id: int) -> None:
     Background task to generate text chunks and embeddings for an uploaded file.
     Uses a fresh database session and ensures it is closed in finally.
     """
+    logger.info("Background chunking/embedding task started for file_id=%d", file_id)
     db = SessionLocal()
     try:
-        process_chunking_and_embedding(db=db, file_id=file_id)
-    except Exception:
-        logger.exception("Unexpected error in background chunking/embedding for file_id=%d", file_id)
+        logger.info("Starting process_chunking_and_embedding for file_id=%d", file_id)
+        result = process_chunking_and_embedding(db=db, file_id=file_id)
+        logger.info("process_chunking_and_embedding returned for file_id=%d with result=%s", file_id, result)
+    except Exception as e:
+        logger.exception("Unexpected error in background chunking/embedding for file_id=%d (%s: %s)", file_id, type(e).__name__, str(e))
     finally:
         db.close()
+        logger.info("Background chunking/embedding task finished for file_id=%d", file_id)
 
 
 @router.post("/upload", response_model=FileOut, status_code=status.HTTP_201_CREATED)
@@ -124,6 +128,7 @@ async def upload_file(
     # 6. Phase 5: Asynchronous Background Text Chunking & Embedding
     if extraction_succeeded and has_meaningful_text:
         background_tasks.add_task(_process_file_in_background, file_record.id)
+        logger.info("Background chunking/embedding task scheduled for file_id=%d", file_record.id)
 
     # 7. Audit Log
     log_audit(

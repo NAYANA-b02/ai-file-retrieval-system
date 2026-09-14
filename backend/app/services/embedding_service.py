@@ -48,8 +48,10 @@ def _get_embedding_model():
     """Load the sentence-transformers model once and reuse it."""
     global _embedding_model
     if _embedding_model is None:
+        logger.info("SentenceTransformer model loading started: %s", settings.EMBEDDING_MODEL_NAME)
         from sentence_transformers import SentenceTransformer
         _embedding_model = SentenceTransformer(settings.EMBEDDING_MODEL_NAME)
+        logger.info("SentenceTransformer model loaded successfully: %s", settings.EMBEDDING_MODEL_NAME)
     return _embedding_model
 
 
@@ -89,10 +91,18 @@ def process_chunking_and_embedding(db: DBSession, file_id: int) -> Optional[int]
 
     Never raises; logs errors internally.
     """
+    logger.info("process_chunking_and_embedding: started for file_id=%d", file_id)
     file_record = db.query(File).filter(File.id == file_id).first()
     if not file_record:
         logger.warning("process_chunking_and_embedding: file_id=%d not found", file_id)
         return None
+
+    logger.info(
+        "process_chunking_and_embedding: file_id=%d lookup status=%s, has_extracted_text=%s",
+        file_id,
+        file_record.processing_status,
+        bool(file_record.extracted_text and file_record.extracted_text.strip()),
+    )
 
     # Only process files with successfully extracted text (completed or processing)
     if file_record.processing_status not in ("completed", "processing"):
@@ -115,13 +125,16 @@ def process_chunking_and_embedding(db: DBSession, file_id: int) -> Optional[int]
 
         # 2. Chunk the text
         chunks = chunk_text(file_record.extracted_text)
+        logger.info("process_chunking_and_embedding: generated %d chunks for file_id=%d", len(chunks), file_id)
         if not chunks:
             file_record.text_chunk_count = 0
             db.commit()
             return 0
 
         # 3. Generate embeddings in batch
+        logger.info("process_chunking_and_embedding: before embedding generation for file_id=%d (%d chunks)", file_id, len(chunks))
         embeddings = generate_embeddings(chunks)
+        logger.info("process_chunking_and_embedding: after embedding generation for file_id=%d", file_id)
 
         # 4. Create TextChunk records
         for idx, (chunk_text_str, embedding) in enumerate(zip(chunks, embeddings)):
@@ -137,7 +150,14 @@ def process_chunking_and_embedding(db: DBSession, file_id: int) -> Optional[int]
         file_record.text_chunk_count = len(chunks)
         file_record.processing_status = "completed"
         file_record.error_message = None
+        logger.info("process_chunking_and_embedding: before database commit for file_id=%d", file_id)
         db.commit()
+        logger.info(
+            "process_chunking_and_embedding: after database commit for file_id=%d (status=%s, chunk_count=%d)",
+            file_id,
+            file_record.processing_status,
+            file_record.text_chunk_count,
+        )
 
         logger.info(
             "Created %d chunks with embeddings for file_id=%d",
