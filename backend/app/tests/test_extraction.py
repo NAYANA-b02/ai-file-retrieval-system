@@ -1,4 +1,5 @@
 import io
+import time
 import unittest
 from fastapi.testclient import TestClient
 import pymupdf
@@ -50,6 +51,19 @@ class TestPhase4TextExtraction(unittest.TestCase):
         cls.user2_username = "extract_user2"
         cls.user2_email = "extract_user2@example.com"
         cls.user2_password = "Password123!"
+
+    def wait_for_file_completion(self, file_id: int, cookies: dict, timeout: float = 15.0, poll_interval: float = 0.2) -> dict:
+        """Poll GET /api/v1/files/{file_id} until processing_status is 'completed' or 'failed'."""
+        start = time.time()
+        while time.time() - start < timeout:
+            res = self.client.get(f"/api/v1/files/{file_id}", cookies=cookies)
+            if res.status_code == 200:
+                data = res.json()
+                if data.get("processing_status") in ("completed", "failed"):
+                    return data
+            time.sleep(poll_interval)
+        res = self.client.get(f"/api/v1/files/{file_id}", cookies=cookies)
+        return res.json()
 
     def setUp(self):
         db = SessionLocal()
@@ -113,10 +127,15 @@ class TestPhase4TextExtraction(unittest.TestCase):
         )
         self.assertEqual(response.status_code, 201)
         data = response.json()
-        self.assertEqual(data["processing_status"], "completed")
+        self.assertEqual(data["processing_status"], "processing")
         self.assertIsNotNone(data["extracted_text"])
         self.assertIn("PyMuPDF text extraction", data["extracted_text"])
         self.assertIsNone(data["error_message"])
+
+        file_data = self.wait_for_file_completion(data["id"], cookies={settings.SESSION_COOKIE_NAME: self.user1_session})
+        self.assertEqual(file_data["processing_status"], "completed")
+        self.assertIn("PyMuPDF text extraction", file_data["extracted_text"])
+        self.assertIsNone(file_data["error_message"])
 
     def test_02_docx_text_extraction(self):
         """TEST 2: DOCX text extraction using python-docx"""
@@ -134,10 +153,15 @@ class TestPhase4TextExtraction(unittest.TestCase):
         )
         self.assertEqual(response.status_code, 201)
         data = response.json()
-        self.assertEqual(data["processing_status"], "completed")
+        self.assertEqual(data["processing_status"], "processing")
         self.assertIsNotNone(data["extracted_text"])
         self.assertIn(expected_text, data["extracted_text"])
         self.assertIsNone(data["error_message"])
+
+        file_data = self.wait_for_file_completion(data["id"], cookies={settings.SESSION_COOKIE_NAME: self.user1_session})
+        self.assertEqual(file_data["processing_status"], "completed")
+        self.assertIn(expected_text, file_data["extracted_text"])
+        self.assertIsNone(file_data["error_message"])
 
     def test_03_txt_text_extraction(self):
         """TEST 3: Plain text extraction with UTF-8 decoding"""
@@ -151,10 +175,15 @@ class TestPhase4TextExtraction(unittest.TestCase):
         )
         self.assertEqual(response.status_code, 201)
         data = response.json()
-        self.assertEqual(data["processing_status"], "completed")
+        self.assertEqual(data["processing_status"], "processing")
         self.assertIsNotNone(data["extracted_text"])
         self.assertEqual(data["extracted_text"], expected_text)
         self.assertIsNone(data["error_message"])
+
+        file_data = self.wait_for_file_completion(data["id"], cookies={settings.SESSION_COOKIE_NAME: self.user1_session})
+        self.assertEqual(file_data["processing_status"], "completed")
+        self.assertEqual(file_data["extracted_text"], expected_text)
+        self.assertIsNone(file_data["error_message"])
 
     def test_04_png_image_ocr(self):
         """TEST 4: PNG image OCR using pytesseract + Pillow"""
@@ -167,9 +196,14 @@ class TestPhase4TextExtraction(unittest.TestCase):
         )
         self.assertEqual(response.status_code, 201)
         data = response.json()
-        self.assertEqual(data["processing_status"], "completed")
+        self.assertEqual(data["processing_status"], "processing")
         self.assertIsNotNone(data["extracted_text"])
         self.assertIn("INVOICE", data["extracted_text"].upper())
+
+        file_data = self.wait_for_file_completion(data["id"], cookies={settings.SESSION_COOKIE_NAME: self.user1_session})
+        self.assertEqual(file_data["processing_status"], "completed")
+        self.assertIsNotNone(file_data["extracted_text"])
+        self.assertIn("INVOICE", file_data["extracted_text"].upper())
 
     def test_05_jpeg_image_ocr(self):
         """TEST 5: JPEG image OCR using pytesseract + Pillow"""
@@ -182,9 +216,14 @@ class TestPhase4TextExtraction(unittest.TestCase):
         )
         self.assertEqual(response.status_code, 201)
         data = response.json()
-        self.assertEqual(data["processing_status"], "completed")
+        self.assertEqual(data["processing_status"], "processing")
         self.assertIsNotNone(data["extracted_text"])
         self.assertIn("DOCUMENT", data["extracted_text"].upper())
+
+        file_data = self.wait_for_file_completion(data["id"], cookies={settings.SESSION_COOKIE_NAME: self.user1_session})
+        self.assertEqual(file_data["processing_status"], "completed")
+        self.assertIsNotNone(file_data["extracted_text"])
+        self.assertIn("DOCUMENT", file_data["extracted_text"].upper())
 
     def test_06_corrupted_file_error_handling(self):
         """TEST 6: Corrupted file fails safely with status=failed and safe error message"""
@@ -198,12 +237,15 @@ class TestPhase4TextExtraction(unittest.TestCase):
         )
         self.assertEqual(response.status_code, 201)
         data = response.json()
-        # Processing status should reflect completion or failure gracefully
-        self.assertIn(data["processing_status"], ("failed", "completed"))
+        # Processing status should reflect completion or failure gracefully (or processing before background completes)
+        self.assertIn(data["processing_status"], ("failed", "completed", "processing"))
         if data["processing_status"] == "failed":
             self.assertIsNotNone(data["error_message"])
             self.assertNotIn("C:\\", data["error_message"])
             self.assertNotIn("Users", data["error_message"])
+        else:
+            file_data = self.wait_for_file_completion(data["id"], cookies={settings.SESSION_COOKIE_NAME: self.user1_session})
+            self.assertIn(file_data["processing_status"], ("failed", "completed"))
 
     def test_07_get_file_by_id_and_ownership(self):
         """TEST 7: GET /api/v1/files/{file_id} returns extracted text and enforces ownership"""

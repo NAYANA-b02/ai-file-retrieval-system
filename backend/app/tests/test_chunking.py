@@ -1,4 +1,5 @@
 import io
+import time
 import unittest
 
 import numpy as np
@@ -48,6 +49,19 @@ class TestPhase5ChunkingAndEmbeddings(unittest.TestCase):
         cls.user2_username = "chunk_user2"
         cls.user2_email = "chunk_user2@example.com"
         cls.user2_password = "Password123!"
+
+    def wait_for_file_completion(self, file_id: int, cookies: dict, timeout: float = 15.0, poll_interval: float = 0.2) -> dict:
+        """Poll GET /api/v1/files/{file_id} until processing_status is 'completed' or 'failed'."""
+        start = time.time()
+        while time.time() - start < timeout:
+            res = self.client.get(f"/api/v1/files/{file_id}", cookies=cookies)
+            if res.status_code == 200:
+                data = res.json()
+                if data.get("processing_status") in ("completed", "failed"):
+                    return data
+            time.sleep(poll_interval)
+        res = self.client.get(f"/api/v1/files/{file_id}", cookies=cookies)
+        return res.json()
 
     def setUp(self):
         db = SessionLocal()
@@ -112,8 +126,12 @@ class TestPhase5ChunkingAndEmbeddings(unittest.TestCase):
         )
         self.assertEqual(response.status_code, 201)
         data = response.json()
-        self.assertEqual(data["processing_status"], "completed")
-        self.assertGreater(data["text_chunk_count"], 1)
+        self.assertEqual(data["processing_status"], "processing")
+        self.assertEqual(data["text_chunk_count"], 0)
+
+        file_data = self.wait_for_file_completion(data["id"], cookies={settings.SESSION_COOKIE_NAME: self.user1_session})
+        self.assertEqual(file_data["processing_status"], "completed")
+        self.assertGreater(file_data["text_chunk_count"], 1)
 
         # Verify chunks in database
         db = SessionLocal()
@@ -121,7 +139,7 @@ class TestPhase5ChunkingAndEmbeddings(unittest.TestCase):
             chunks = db.query(TextChunk).filter(
                 TextChunk.file_id == data["id"]
             ).order_by(TextChunk.chunk_index).all()
-            self.assertEqual(len(chunks), data["text_chunk_count"])
+            self.assertEqual(len(chunks), file_data["text_chunk_count"])
             for i, chunk in enumerate(chunks):
                 self.assertEqual(chunk.chunk_index, i)
                 self.assertTrue(len(chunk.chunk_text) > 0)
@@ -142,15 +160,19 @@ class TestPhase5ChunkingAndEmbeddings(unittest.TestCase):
         )
         self.assertEqual(response.status_code, 201)
         data = response.json()
-        self.assertEqual(data["processing_status"], "completed")
-        self.assertGreater(data["text_chunk_count"], 0)
+        self.assertEqual(data["processing_status"], "processing")
+        self.assertEqual(data["text_chunk_count"], 0)
+
+        file_data = self.wait_for_file_completion(data["id"], cookies={settings.SESSION_COOKIE_NAME: self.user1_session})
+        self.assertEqual(file_data["processing_status"], "completed")
+        self.assertGreater(file_data["text_chunk_count"], 0)
 
         db = SessionLocal()
         try:
             chunks = db.query(TextChunk).filter(
                 TextChunk.file_id == data["id"]
             ).all()
-            self.assertEqual(len(chunks), data["text_chunk_count"])
+            self.assertEqual(len(chunks), file_data["text_chunk_count"])
             for chunk in chunks:
                 self.assertIsNotNone(chunk.embedding)
         finally:
@@ -172,15 +194,19 @@ class TestPhase5ChunkingAndEmbeddings(unittest.TestCase):
         )
         self.assertEqual(response.status_code, 201)
         data = response.json()
-        self.assertEqual(data["processing_status"], "completed")
-        self.assertGreater(data["text_chunk_count"], 0)
+        self.assertEqual(data["processing_status"], "processing")
+        self.assertEqual(data["text_chunk_count"], 0)
+
+        file_data = self.wait_for_file_completion(data["id"], cookies={settings.SESSION_COOKIE_NAME: self.user1_session})
+        self.assertEqual(file_data["processing_status"], "completed")
+        self.assertGreater(file_data["text_chunk_count"], 0)
 
         db = SessionLocal()
         try:
             chunks = db.query(TextChunk).filter(
                 TextChunk.file_id == data["id"]
             ).all()
-            self.assertEqual(len(chunks), data["text_chunk_count"])
+            self.assertEqual(len(chunks), file_data["text_chunk_count"])
         finally:
             db.close()
 
@@ -196,8 +222,12 @@ class TestPhase5ChunkingAndEmbeddings(unittest.TestCase):
         )
         self.assertEqual(response.status_code, 201)
         data = response.json()
-        self.assertEqual(data["processing_status"], "completed")
-        self.assertEqual(data["text_chunk_count"], 1)
+        self.assertEqual(data["processing_status"], "processing")
+        self.assertEqual(data["text_chunk_count"], 0)
+
+        file_data = self.wait_for_file_completion(data["id"], cookies={settings.SESSION_COOKIE_NAME: self.user1_session})
+        self.assertEqual(file_data["processing_status"], "completed")
+        self.assertEqual(file_data["text_chunk_count"], 1)
 
         db = SessionLocal()
         try:
@@ -295,7 +325,11 @@ class TestPhase5ChunkingAndEmbeddings(unittest.TestCase):
         )
         self.assertEqual(response.status_code, 201)
         file_id = response.json()["id"]
-        original_count = response.json()["text_chunk_count"]
+
+        file_data = self.wait_for_file_completion(file_id, cookies={settings.SESSION_COOKIE_NAME: self.user1_session})
+        self.assertEqual(file_data["processing_status"], "completed")
+        original_count = file_data["text_chunk_count"]
+        self.assertGreater(original_count, 0)
 
         # Re-process the same file
         db = SessionLocal()
@@ -320,6 +354,9 @@ class TestPhase5ChunkingAndEmbeddings(unittest.TestCase):
         )
         self.assertEqual(response.status_code, 201)
         file_id = response.json()["id"]
+
+        file_data = self.wait_for_file_completion(file_id, cookies={settings.SESSION_COOKIE_NAME: self.user1_session})
+        self.assertEqual(file_data["processing_status"], "completed")
 
         db = SessionLocal()
         try:

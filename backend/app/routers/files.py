@@ -1,8 +1,9 @@
+import logging
 from typing import List
-from fastapi import APIRouter, Depends, File, UploadFile, HTTPException, status
+from fastapi import APIRouter, BackgroundTasks, Depends, File, UploadFile, HTTPException, status
 from sqlalchemy.orm import Session as DBSession
 
-from app.core.database import get_db
+from app.core.database import SessionLocal, get_db
 from app.models.user import User
 from app.models.file import File as FileModel
 from app.schemas.file import FileOut
@@ -17,11 +18,28 @@ from app.services.text_extraction_service import process_file_extraction
 from app.services.embedding_service import process_chunking_and_embedding
 from app.services.audit_service import log_audit
 
+logger = logging.getLogger(__name__)
+
 router = APIRouter(prefix="/api/v1/files", tags=["Files"])
+
+
+def _process_file_in_background(file_id: int) -> None:
+    """
+    Background task to generate text chunks and embeddings for an uploaded file.
+    Uses a fresh database session and ensures it is closed in finally.
+    """
+    db = SessionLocal()
+    try:
+        process_chunking_and_embedding(db=db, file_id=file_id)
+    except Exception:
+        logger.exception("Unexpected error in background chunking/embedding for file_id=%d", file_id)
+    finally:
+        db.close()
 
 
 @router.post("/upload", response_model=FileOut, status_code=status.HTTP_201_CREATED)
 async def upload_file(
+    background_tasks: BackgroundTasks,
     file: UploadFile = File(...),
     current_user: User = Depends(get_current_user),
     db: DBSession = Depends(get_db),
@@ -33,7 +51,8 @@ async def upload_file(
     - Stores file in private directory using UUID filename
     - Saves metadata to database
     - Extracts text (PDF, DOCX, TXT) or performs OCR (JPG, JPEG, PNG)
-    - Updates processing_status ('completed' or 'failed') and extracted_text
+    - Updates processing_status ('processing' or 'failed') and extracted_text
+    - Dispatches heavy chunking & embedding as a FastAPI BackgroundTask
     - Never exposes physical server filesystem paths
     """
     file_bytes = await file.read()
@@ -65,15 +84,30 @@ async def upload_file(
     )
 
     # 5. Phase 4: Text Extraction & OCR Processing
+    extraction_succeeded = False
+    has_meaningful_text = False
     try:
         extracted_text = process_file_extraction(extension=ext, file_bytes=file_bytes)
-        update_file_processing_result(
-            db=db,
-            file_id=file_record.id,
-            status="completed",
-            extracted_text=extracted_text,
-            error_message=None
-        )
+        extraction_succeeded = True
+        has_meaningful_text = bool(extracted_text and extracted_text.strip())
+
+        if has_meaningful_text:
+            update_file_processing_result(
+                db=db,
+                file_id=file_record.id,
+                status="processing",
+                extracted_text=extracted_text,
+                error_message=None,
+            )
+        else:
+            # Empty or whitespace-only text: successfully processed with 0 chunks
+            update_file_processing_result(
+                db=db,
+                file_id=file_record.id,
+                status="completed",
+                extracted_text=extracted_text,
+                error_message=None,
+            )
     except Exception as e:
         # Sanitize error message to prevent leaking physical server filesystem paths
         safe_error = f"Text extraction failed: {type(e).__name__}"
@@ -82,15 +116,14 @@ async def upload_file(
             file_id=file_record.id,
             status="failed",
             extracted_text=None,
-            error_message=safe_error
+            error_message=safe_error,
         )
 
     db.refresh(file_record)
 
-    # 6. Phase 5: Text Chunking & Embedding
-    if file_record.processing_status == "completed":
-        process_chunking_and_embedding(db=db, file_id=file_record.id)
-        db.refresh(file_record)
+    # 6. Phase 5: Asynchronous Background Text Chunking & Embedding
+    if extraction_succeeded and has_meaningful_text:
+        background_tasks.add_task(_process_file_in_background, file_record.id)
 
     # 7. Audit Log
     log_audit(
@@ -98,7 +131,7 @@ async def upload_file(
         user_id=current_user.id,
         file_id=file_record.id,
         action="file_upload",
-        details=f"Uploaded file: {file.filename} (status: {file_record.processing_status})"
+        details=f"Uploaded file: {file.filename} (status: {file_record.processing_status})",
     )
 
     return file_record

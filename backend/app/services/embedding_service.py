@@ -80,10 +80,12 @@ def process_chunking_and_embedding(db: DBSession, file_id: int) -> Optional[int]
     """
     Chunk the extracted text of a file and generate embeddings.
 
-    - Skips files whose processing_status is not 'completed'
+    - Skips files whose processing_status is not 'completed' or 'processing'
     - Skips files with empty / whitespace-only extracted_text
     - Deletes existing chunks first (idempotent / repeatable)
-    - Returns the number of chunks created, or None if skipped
+    - Sets processing_status to 'completed' and error_message to None on success
+    - Sets processing_status to 'failed' on exception
+    - Returns the number of chunks created, or None if skipped or failed
 
     Never raises; logs errors internally.
     """
@@ -92,8 +94,8 @@ def process_chunking_and_embedding(db: DBSession, file_id: int) -> Optional[int]
         logger.warning("process_chunking_and_embedding: file_id=%d not found", file_id)
         return None
 
-    # Only process files with successfully extracted text
-    if file_record.processing_status != "completed":
+    # Only process files with successfully extracted text (completed or processing)
+    if file_record.processing_status not in ("completed", "processing"):
         logger.info(
             "Skipping chunking for file_id=%d (status=%s)",
             file_id, file_record.processing_status,
@@ -131,8 +133,10 @@ def process_chunking_and_embedding(db: DBSession, file_id: int) -> Optional[int]
             )
             db.add(text_chunk)
 
-        # 5. Update chunk count on file record
+        # 5. Update chunk count, processing_status, and clear error_message on file record
         file_record.text_chunk_count = len(chunks)
+        file_record.processing_status = "completed"
+        file_record.error_message = None
         db.commit()
 
         logger.info(
