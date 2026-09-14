@@ -143,9 +143,17 @@ def process_chunking_and_embedding(db: DBSession, file_id: int) -> Optional[int]
 
     except Exception as e:
         db.rollback()
-        logger.error(
+        logger.exception(
             "Chunking/embedding failed for file_id=%d: %s", file_id, e,
         )
-        file_record.text_chunk_count = 0
-        db.commit()
+        file_record = db.query(File).filter(File.id == file_id).first()
+        if file_record:
+            file_record.processing_status = "failed"
+            file_record.text_chunk_count = 0
+            file_record.error_message = f"Text chunking and embedding failed: {type(e).__name__}"
+            try:
+                db.commit()
+            except Exception:
+                db.rollback()
+                logger.exception("Failed to commit failure status for file_id=%d", file_id)
         return None
