@@ -52,6 +52,11 @@ class Settings(BaseSettings):
     OLLAMA_TIMEOUT_SECONDS: int = 30
     RAG_SIMILARITY_THRESHOLD: float = 0.35
 
+    LLM_PROVIDER: str = "ollama"
+    GROQ_API_KEY: Optional[str] = None
+    GROQ_MODEL: str = "llama-3.3-70b-versatile"
+    GROQ_TIMEOUT_SECONDS: int = 30
+
     model_config = SettingsConfigDict(
         env_file=(str(ENV_FILE), str(ROOT_ENV_FILE), ".env"),
         env_file_encoding="utf-8",

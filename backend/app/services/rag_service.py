@@ -7,6 +7,7 @@ from app.core.config import settings
 from app.schemas.rag import CitationItem, RAGAnswerResponse
 from app.services.search_service import execute_hybrid_search
 from app.services.ollama_service import call_ollama_chat
+from app.services.llm_service import call_llm_chat
 from app.services.audit_service import log_audit
 
 logger = logging.getLogger(__name__)
@@ -137,8 +138,8 @@ def execute_rag(
         {"role": "user", "content": user_message},
     ]
 
-    # 7. Call local Ollama LLM
-    answer = call_ollama_chat(messages)
+    # 7. Call LLM (dispatches to configured provider: Ollama / Groq)
+    answer = call_llm_chat(messages)
 
     # 8. Audit Logging
     log_audit(
