@@ -15,6 +15,7 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 CHUNK_SIZE = 500       # characters per chunk
 CHUNK_OVERLAP = 50     # overlap between consecutive chunks
+BATCH_SIZE = 16        # FastEmbed batch size for bounded memory usage
 
 
 def chunk_text(text: str) -> List[str]:
@@ -45,23 +46,26 @@ _embedding_model = None
 
 
 def _get_embedding_model():
-    """Load the sentence-transformers model once and reuse it."""
+    """Load the FastEmbed TextEmbedding model once and reuse it."""
     global _embedding_model
     if _embedding_model is None:
-        logger.info("SentenceTransformer model loading started: %s", settings.EMBEDDING_MODEL_NAME)
-        from sentence_transformers import SentenceTransformer
-        _embedding_model = SentenceTransformer(settings.EMBEDDING_MODEL_NAME)
-        logger.info("SentenceTransformer model loaded successfully: %s", settings.EMBEDDING_MODEL_NAME)
+        model_name = settings.EMBEDDING_MODEL_NAME
+        logger.info("FastEmbed TextEmbedding model loading started: %s", model_name)
+        from fastembed import TextEmbedding
+        _embedding_model = TextEmbedding(model_name=model_name)
+        logger.info("FastEmbed TextEmbedding model loaded successfully: %s", model_name)
     return _embedding_model
 
 
-def generate_embeddings(texts: List[str]) -> List[np.ndarray]:
+def generate_embeddings(texts: List[str], batch_size: int = BATCH_SIZE) -> List[np.ndarray]:
     """
-    Generate embeddings for a list of text strings.
-    Returns a list of numpy float32 arrays (384-dim for all-MiniLM-L6-v2).
+    Generate embeddings for a list of text strings using FastEmbed.
+    Returns a list of numpy float32 arrays (384-dim for BAAI/bge-small-en-v1.5).
     """
+    if not texts:
+        return []
     model = _get_embedding_model()
-    embeddings = model.encode(texts, convert_to_numpy=True)
+    embeddings = model.embed(texts, batch_size=batch_size)
     return [emb.astype(np.float32) for emb in embeddings]
 
 
@@ -87,6 +91,7 @@ def process_chunking_and_embedding(db: DBSession, file_id: int) -> Optional[int]
     - Deletes existing chunks first (idempotent / repeatable)
     - Sets processing_status to 'completed' and error_message to None on success
     - Sets processing_status to 'failed' on exception
+    - Streams embeddings in small batches to keep memory usage bounded
     - Returns the number of chunks created, or None if skipped or failed
 
     Never raises; logs errors internally.
@@ -131,22 +136,27 @@ def process_chunking_and_embedding(db: DBSession, file_id: int) -> Optional[int]
             db.commit()
             return 0
 
-        # 3. Generate embeddings in batch
+        # 3. Generate embeddings in small batches and persist TextChunk records
         logger.info("process_chunking_and_embedding: before embedding generation for file_id=%d (%d chunks)", file_id, len(chunks))
-        embeddings = generate_embeddings(chunks)
+        model = _get_embedding_model()
+        chunk_idx = 0
+        for i in range(0, len(chunks), BATCH_SIZE):
+            batch_chunks = chunks[i : i + BATCH_SIZE]
+            batch_embeddings = model.embed(batch_chunks, batch_size=len(batch_chunks))
+            for chunk_text_str, emb in zip(batch_chunks, batch_embeddings):
+                text_chunk = TextChunk(
+                    file_id=file_id,
+                    chunk_index=chunk_idx,
+                    chunk_text=chunk_text_str,
+                    embedding=serialize_embedding(emb.astype(np.float32)),
+                )
+                db.add(text_chunk)
+                chunk_idx += 1
+            db.flush()
+
         logger.info("process_chunking_and_embedding: after embedding generation for file_id=%d", file_id)
 
-        # 4. Create TextChunk records
-        for idx, (chunk_text_str, embedding) in enumerate(zip(chunks, embeddings)):
-            text_chunk = TextChunk(
-                file_id=file_id,
-                chunk_index=idx,
-                chunk_text=chunk_text_str,
-                embedding=serialize_embedding(embedding),
-            )
-            db.add(text_chunk)
-
-        # 5. Update chunk count, processing_status, and clear error_message on file record
+        # 4. Update chunk count, processing_status, and clear error_message on file record
         file_record.text_chunk_count = len(chunks)
         file_record.processing_status = "completed"
         file_record.error_message = None

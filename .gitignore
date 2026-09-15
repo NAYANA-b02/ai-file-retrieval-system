@@ -16,11 +16,10 @@ __pycache__/
 *.swp
 
 # Application Data
-app/data/uploads/*
-!app/data/uploads/.gitkeep
-app/data/indexes/*
-!app/data/indexes/.gitkeep
-
+backend/app/data/uploads/*
+!backend/app/data/uploads/.gitkeep
+backend/app/data/indexes/*
+!backend/app/data/indexes/.gitkeep
 # OS
 .DS_Store
 Thumbs.db

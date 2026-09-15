@@ -43,7 +43,7 @@ class Settings(BaseSettings):
     COOKIE_SECURE: bool = False
     COOKIE_SAMESITE: str = "lax"
 
-    EMBEDDING_MODEL_NAME: str = "all-MiniLM-L6-v2"
+    EMBEDDING_MODEL_NAME: str = "BAAI/bge-small-en-v1.5"
     KEYWORD_SEARCH_WEIGHT: float = 0.4
     SEMANTIC_SEARCH_WEIGHT: float = 0.6
 

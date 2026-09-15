@@ -29,7 +29,7 @@ def execute_semantic_search(
     """
     Perform semantic search across document chunks belonging strictly to the user.
 
-    - Reuses the all-MiniLM-L6-v2 model to encode the query.
+    - Reuses the configured embedding model to encode the query.
     - Computes cosine similarity against all user-owned chunks.
     - Returns top-k most relevant chunks ordered by descending similarity score.
     - Enforces ownership: only returns chunks from files where file.owner_id == user_id.
@@ -75,7 +75,7 @@ def execute_semantic_search(
         )
 
     model = _get_embedding_model()
-    query_emb = model.encode(clean_query, convert_to_numpy=True).astype(np.float32)
+    query_emb = next(iter(model.query_embed([clean_query]))).astype(np.float32)
     query_norm = np.linalg.norm(query_emb)
     if query_norm > 0:
         query_emb = query_emb / query_norm
@@ -329,7 +329,7 @@ def execute_hybrid_search(
 
     # 1. Semantic Scoring
     model = _get_embedding_model()
-    query_emb = model.encode(clean_query, convert_to_numpy=True).astype(np.float32)
+    query_emb = next(iter(model.query_embed([clean_query]))).astype(np.float32)
     query_norm = np.linalg.norm(query_emb)
     if query_norm > 0:
         query_emb = query_emb / query_norm

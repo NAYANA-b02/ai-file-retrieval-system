@@ -14,5 +14,6 @@ pymupdf
 python-docx
 pytesseract
 Pillow
-sentence-transformers
+fastembed
+onnxruntime
 numpy
