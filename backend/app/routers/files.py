@@ -73,7 +73,11 @@ async def upload_file(
     validate_file_content(ext=ext, file_bytes=file_bytes)
 
     # 3. Private Storage (UUID filename, path traversal check)
-    stored_filename, physical_path = save_file_privately(file_bytes=file_bytes, ext=ext)
+    stored_filename, physical_path = save_file_privately(
+        file_bytes=file_bytes,
+        ext=ext,
+        mime_type=mime_type,
+    )
 
     # 4. Metadata Persistence (Initial status)
     file_record = persist_file_record(
