@@ -1,6 +1,7 @@
 import React from 'react';
 import { Routes, Route, Navigate } from 'react-router-dom';
 import { AuthProvider } from './context/AuthContext';
+import { ToastProvider } from './context/ToastContext';
 import ProtectedRoute from './components/ProtectedRoute';
 import Layout from './components/Layout';
 import LoginPage from './pages/LoginPage';
@@ -14,30 +15,32 @@ import RagPage from './pages/RagPage';
 export default function App() {
   return (
     <AuthProvider>
-      <Routes>
-        {/* Public Routes */}
-        <Route path="/login" element={<LoginPage />} />
-        <Route path="/register" element={<RegisterPage />} />
+      <ToastProvider>
+        <Routes>
+          {/* Public Routes */}
+          <Route path="/login" element={<LoginPage />} />
+          <Route path="/register" element={<RegisterPage />} />
 
-        {/* Protected Application Routes */}
-        <Route
-          path="/"
-          element={
-            <ProtectedRoute>
-              <Layout />
-            </ProtectedRoute>
-          }
-        >
-          <Route index element={<DashboardPage />} />
-          <Route path="upload" element={<UploadPage />} />
-          <Route path="files" element={<FilesPage />} />
-          <Route path="search" element={<SearchPage />} />
-          <Route path="rag" element={<RagPage />} />
-        </Route>
+          {/* Protected Application Routes */}
+          <Route
+            path="/"
+            element={
+              <ProtectedRoute>
+                <Layout />
+              </ProtectedRoute>
+            }
+          >
+            <Route index element={<DashboardPage />} />
+            <Route path="upload" element={<UploadPage />} />
+            <Route path="files" element={<FilesPage />} />
+            <Route path="search" element={<SearchPage />} />
+            <Route path="rag" element={<RagPage />} />
+          </Route>
 
-        {/* Catch-all redirect to Dashboard */}
-        <Route path="*" element={<Navigate to="/" replace />} />
-      </Routes>
+          {/* Catch-all redirect to Dashboard */}
+          <Route path="*" element={<Navigate to="/" replace />} />
+        </Routes>
+      </ToastProvider>
     </AuthProvider>
   );
 }

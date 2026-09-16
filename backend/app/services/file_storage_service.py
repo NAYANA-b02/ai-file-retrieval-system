@@ -186,3 +186,107 @@ def update_file_processing_result(
     db.commit()
     db.refresh(file_record)
     return file_record
+
+
+def get_file_bytes(file_record: File) -> bytes:
+    """
+    Retrieves raw file content bytes from either Supabase Storage or local private upload dir.
+    Never exposes physical filesystem paths or storage credentials in exceptions.
+    """
+    storage_path = file_record.file_path or ""
+    if storage_path.startswith("supabase://"):
+        if not settings.SUPABASE_URL or not settings.SUPABASE_SECRET_KEY:
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="Remote storage is not properly configured",
+            )
+        parts = storage_path.replace("supabase://", "").split("/", 1)
+        if len(parts) != 2:
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="Invalid remote storage reference format",
+            )
+        bucket, stored_filename = parts[0], parts[1]
+        base_url = settings.SUPABASE_URL.rstrip("/")
+        url = f"{base_url}/storage/v1/object/{bucket}/{stored_filename}"
+        headers = {
+            "Authorization": f"Bearer {settings.SUPABASE_SECRET_KEY}",
+            "apikey": settings.SUPABASE_SECRET_KEY,
+        }
+        try:
+            with httpx.Client(timeout=30.0) as client:
+                resp = client.get(url, headers=headers)
+            if resp.status_code == 404:
+                raise HTTPException(
+                    status_code=status.HTTP_404_NOT_FOUND,
+                    detail="File content not found in remote storage",
+                )
+            if resp.status_code >= 400:
+                logger.error("Supabase Storage get failed with status %d", resp.status_code)
+                raise HTTPException(
+                    status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                    detail="Failed to retrieve file from remote storage",
+                )
+            return resp.content
+        except HTTPException:
+            raise
+        except Exception as exc:
+            logger.error("Error retrieving file from Supabase Storage: %s", type(exc).__name__)
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="Failed to retrieve file from remote storage",
+            )
+
+    # Local filesystem storage
+    file_path = Path(storage_path)
+    if not file_path.is_file():
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="File content not found on server",
+        )
+    try:
+        with open(file_path, "rb") as f:
+            return f.read()
+    except Exception as exc:
+        logger.error("Error reading local file: %s", type(exc).__name__)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to read file from storage",
+        )
+
+
+def delete_file_from_storage(file_record: File) -> None:
+    """
+    Deletes the underlying binary file from Supabase Storage or local upload directory.
+    Fails silently with a warning if the file was already missing.
+    """
+    storage_path = file_record.file_path or ""
+    if storage_path.startswith("supabase://"):
+        if not settings.SUPABASE_URL or not settings.SUPABASE_SECRET_KEY:
+            logger.warning("Cannot delete remote file: Supabase credentials not set")
+            return
+        parts = storage_path.replace("supabase://", "").split("/", 1)
+        if len(parts) != 2:
+            return
+        bucket, stored_filename = parts[0], parts[1]
+        base_url = settings.SUPABASE_URL.rstrip("/")
+        url = f"{base_url}/storage/v1/object/{bucket}/{stored_filename}"
+        headers = {
+            "Authorization": f"Bearer {settings.SUPABASE_SECRET_KEY}",
+            "apikey": settings.SUPABASE_SECRET_KEY,
+        }
+        try:
+            with httpx.Client(timeout=15.0) as client:
+                client.delete(url, headers=headers)
+        except Exception as exc:
+            logger.warning("Failed to delete file from Supabase Storage: %s", exc)
+        return
+
+    # Local file deletion
+    try:
+        path = Path(storage_path)
+        if path.is_file():
+            path.unlink(missing_ok=True)
+    except Exception as exc:
+        logger.warning("Failed to delete local file: %s", exc)
+

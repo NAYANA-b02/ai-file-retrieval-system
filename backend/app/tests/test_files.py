@@ -356,6 +356,86 @@ class TestPhase3FileManagement(unittest.TestCase):
         finally:
             db.close()
 
+    def test_15_get_file_content_and_download(self):
+        """TEST 15: Retrieve binary file content and test download header"""
+        txt_content = b"Content to test download and preview"
+        res = self.client.post(
+            "/api/v1/files/upload",
+            files={"file": ("stream_doc.txt", txt_content, "text/plain")},
+            cookies={settings.SESSION_COOKIE_NAME: self.user1_session}
+        )
+        self.assertEqual(res.status_code, 201)
+        file_id = res.json()["id"]
+
+        # 1. User 1 can view inline
+        view_res = self.client.get(
+            f"/api/v1/files/{file_id}/content",
+            cookies={settings.SESSION_COOKIE_NAME: self.user1_session}
+        )
+        self.assertEqual(view_res.status_code, 200)
+        self.assertEqual(view_res.content, txt_content)
+        self.assertIn("inline", view_res.headers.get("content-disposition", ""))
+        self.assertIn("stream_doc.txt", view_res.headers.get("content-disposition", ""))
+
+        # 2. User 1 can download
+        dl_res = self.client.get(
+            f"/api/v1/files/{file_id}/content?download=true",
+            cookies={settings.SESSION_COOKIE_NAME: self.user1_session}
+        )
+        self.assertEqual(dl_res.status_code, 200)
+        self.assertEqual(dl_res.content, txt_content)
+        self.assertIn("attachment", dl_res.headers.get("content-disposition", ""))
+
+        # 3. User 2 cannot access User 1's file content (isolated)
+        forbidden_res = self.client.get(
+            f"/api/v1/files/{file_id}/content",
+            cookies={settings.SESSION_COOKIE_NAME: self.user2_session}
+        )
+        self.assertEqual(forbidden_res.status_code, 404)
+
+    def test_16_delete_file_with_ownership(self):
+        """TEST 16: Delete file with ownership enforcement and physical file removal"""
+        txt_content = b"File destined to be deleted"
+        res = self.client.post(
+            "/api/v1/files/upload",
+            files={"file": ("to_delete.txt", txt_content, "text/plain")},
+            cookies={settings.SESSION_COOKIE_NAME: self.user1_session}
+        )
+        self.assertEqual(res.status_code, 201)
+        file_id = res.json()["id"]
+        stored_filename = res.json()["stored_filename"]
+
+        upload_dir = get_private_upload_dir()
+        physical_file = upload_dir / stored_filename
+        self.assertTrue(physical_file.exists())
+
+        # 1. User 2 cannot delete User 1's file
+        del_fail = self.client.delete(
+            f"/api/v1/files/{file_id}",
+            cookies={settings.SESSION_COOKIE_NAME: self.user2_session}
+        )
+        self.assertEqual(del_fail.status_code, 404)
+        self.assertTrue(physical_file.exists())
+
+        # 2. User 1 deletes successfully
+        del_ok = self.client.delete(
+            f"/api/v1/files/{file_id}",
+            cookies={settings.SESSION_COOKIE_NAME: self.user1_session}
+        )
+        self.assertEqual(del_ok.status_code, 200)
+        self.assertEqual(del_ok.json()["status"], "success")
+
+        # Confirm DB record is deleted
+        db = SessionLocal()
+        try:
+            self.assertIsNone(db.query(FileModel).filter(FileModel.id == file_id).first())
+        finally:
+            db.close()
+
+        # Confirm physical file is deleted
+        self.assertFalse(physical_file.exists())
+
 
 if __name__ == "__main__":
     unittest.main()
+

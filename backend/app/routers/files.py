@@ -1,6 +1,6 @@
 import logging
 from typing import List
-from fastapi import APIRouter, BackgroundTasks, Depends, File, UploadFile, HTTPException, status
+from fastapi import APIRouter, BackgroundTasks, Depends, File, UploadFile, HTTPException, status, Response, Query
 from sqlalchemy.orm import Session as DBSession
 
 from app.core.database import SessionLocal, get_db
@@ -13,6 +13,8 @@ from app.services.file_storage_service import (
     save_file_privately,
     persist_file_record,
     update_file_processing_result,
+    get_file_bytes,
+    delete_file_from_storage,
 )
 from app.services.text_extraction_service import process_file_extraction
 from app.services.embedding_service import process_chunking_and_embedding
@@ -187,4 +189,87 @@ def get_file(
             detail="File not found"
         )
     return file_record
+
+
+@router.get("/{file_id}/content")
+def get_file_content(
+    file_id: int,
+    download: bool = Query(False, description="Whether to trigger file download as attachment"),
+    current_user: User = Depends(get_current_user),
+    db: DBSession = Depends(get_db),
+):
+    """
+    Streams file bytes for in-browser viewing (OPEN) or download.
+    Strictly enforces file ownership: returns 404 if file does not exist or belongs to another user.
+    Never exposes physical filesystem paths.
+    """
+    file_record = (
+        db.query(FileModel)
+        .filter(FileModel.id == file_id, FileModel.owner_id == current_user.id)
+        .first()
+    )
+    if not file_record:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="File not found"
+        )
+
+    content = get_file_bytes(file_record)
+    disposition = "attachment" if download else "inline"
+    safe_filename = file_record.original_filename.replace('"', '\\"')
+    headers = {
+        "Content-Disposition": f'{disposition}; filename="{safe_filename}"',
+    }
+    return Response(
+        content=content,
+        media_type=file_record.mime_type or "application/octet-stream",
+        headers=headers,
+    )
+
+
+@router.delete("/{file_id}")
+def delete_file(
+    file_id: int,
+    current_user: User = Depends(get_current_user),
+    db: DBSession = Depends(get_db),
+):
+    """
+    Permanently deletes a file owned by the current authenticated user:
+    - Removes raw file from storage (local or Supabase)
+    - Deletes file record and cascading chunks from database
+    - Logs audit trail
+    - Strictly enforces user ownership
+    """
+    file_record = (
+        db.query(FileModel)
+        .filter(FileModel.id == file_id, FileModel.owner_id == current_user.id)
+        .first()
+    )
+    if not file_record:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="File not found"
+        )
+
+    filename = file_record.original_filename
+    delete_file_from_storage(file_record)
+
+    db.delete(file_record)
+    db.commit()
+
+    log_audit(
+        db=db,
+        user_id=current_user.id,
+        file_id=file_id,
+        action="file_delete",
+        details=f"Deleted file: {filename}",
+    )
+
+    return {
+        "status": "success",
+        "message": f"Document '{filename}' was permanently deleted.",
+        "id": file_id,
+        "filename": filename,
+    }
+
 

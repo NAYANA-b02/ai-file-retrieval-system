@@ -1,34 +1,41 @@
 import React, { useState, useEffect } from 'react';
-import api from '../api/client';
-import { 
-  Files, 
-  Search, 
-  Eye, 
-  X, 
-  AlertCircle, 
-  Layers, 
-  Calendar, 
-  HardDrive, 
-  FileText, 
-  CheckCircle2, 
-  XCircle, 
-  Clock, 
-  RefreshCw,
-  Loader2
-} from 'lucide-react';
 import { Link } from 'react-router-dom';
+import api from '../api/client';
+import { useToast } from '../context/ToastContext';
+import { 
+  FolderOpen, 
+  Search, 
+  UploadCloud, 
+  RefreshCw, 
+  FileText, 
+  FileImage, 
+  ExternalLink, 
+  Eye, 
+  Download, 
+  Trash2, 
+  Loader2, 
+  AlertCircle,
+  Calendar,
+  HardDrive,
+  Layers,
+  CheckCircle2,
+  Clock,
+  XCircle
+} from 'lucide-react';
+import FilePreviewModal from '../components/FilePreviewModal';
+import DeleteModal from '../components/DeleteModal';
 
 export default function FilesPage() {
+  const { showSuccess, showError } = useToast();
   const [files, setFiles] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
-  const [searchFilter, setSearchFilter] = useState('');
+  const [searchTerm, setSearchTerm] = useState('');
 
-  // Drawer / Modal state for file detail inspection
-  const [selectedFileId, setSelectedFileId] = useState(null);
-  const [fileDetails, setFileDetails] = useState(null);
-  const [loadingDetails, setLoadingDetails] = useState(false);
-  const [detailsError, setDetailsError] = useState(null);
+  // Modals state
+  const [previewFile, setPreviewFile] = useState(null);
+  const [deleteTargetFile, setDeleteTargetFile] = useState(null);
+  const [deleting, setDeleting] = useState(false);
 
   const fetchFiles = async () => {
     try {
@@ -47,24 +54,58 @@ export default function FilesPage() {
     fetchFiles();
   }, []);
 
-  const openFileDetails = async (id) => {
-    setSelectedFileId(id);
-    setLoadingDetails(true);
-    setDetailsError(null);
+  // 1. OPEN ACTION
+  const handleOpen = async (file) => {
     try {
-      const res = await api.get(`/files/${id}`);
-      setFileDetails(res.data);
+      const res = await api.get(`/files/${file.id}/content`, { responseType: 'blob' });
+      const blobUrl = URL.createObjectURL(res.data);
+      window.open(blobUrl, '_blank');
     } catch (err) {
-      setDetailsError(err.message);
-    } finally {
-      setLoadingDetails(false);
+      showError(err.message || 'Unable to open file.');
     }
   };
 
-  const closeDetails = () => {
-    setSelectedFileId(null);
-    setFileDetails(null);
-    setDetailsError(null);
+  // 2. VIEW ACTION
+  const handleView = (file) => {
+    setPreviewFile(file);
+  };
+
+  // 3. DOWNLOAD ACTION
+  const handleDownload = async (file) => {
+    try {
+      const res = await api.get(`/files/${file.id}/content?download=true`, { responseType: 'blob' });
+      const blobUrl = URL.createObjectURL(res.data);
+      const a = document.createElement('a');
+      a.href = blobUrl;
+      a.download = file.original_filename || 'downloaded_file';
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(blobUrl);
+      showSuccess(`Downloading "${file.original_filename}"...`);
+    } catch (err) {
+      showError(err.message || 'Download failed.');
+    }
+  };
+
+  // 4. DELETE ACTION
+  const handleDeletePrompt = (file) => {
+    setDeleteTargetFile(file);
+  };
+
+  const confirmDelete = async () => {
+    if (!deleteTargetFile) return;
+    setDeleting(true);
+    try {
+      await api.delete(`/files/${deleteTargetFile.id}`);
+      showSuccess(`"${deleteTargetFile.original_filename}" was permanently deleted.`);
+      setFiles((prev) => prev.filter((f) => f.id !== deleteTargetFile.id));
+      setDeleteTargetFile(null);
+    } catch (err) {
+      showError(err.message || 'Failed to delete file.');
+    } finally {
+      setDeleting(false);
+    }
   };
 
   const formatBytes = (bytes) => {
@@ -75,272 +116,329 @@ export default function FilesPage() {
     return parseFloat((bytes / Math.pow(k, i)).toFixed(1)) + ' ' + sizes[i];
   };
 
+  const getFileIcon = (ext) => {
+    const cleanExt = (ext || '').toLowerCase();
+    if (['.png', '.jpg', '.jpeg'].includes(cleanExt)) {
+      return <FileImage className="w-5 h-5 text-[#3B82F6]" />;
+    }
+    return <FileText className="w-5 h-5 text-[#7C3AED]" />;
+  };
+
   const filteredFiles = files.filter((f) =>
-    f.original_filename.toLowerCase().includes(searchFilter.toLowerCase())
+    f.original_filename.toLowerCase().includes(searchTerm.toLowerCase())
   );
 
   return (
-    <div className="space-y-6">
-      {/* Page Header */}
+    <div className="space-y-7">
+      {/* Header */}
       <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
         <div>
-          <h1 className="text-xl sm:text-2xl font-bold text-white tracking-tight">My Documents</h1>
-          <p className="text-xs sm:text-sm text-slate-400 mt-1">
-            Browse and inspect all documents stored in your private vault with extracted text and vector chunk status.
+          <h1 className="text-2xl sm:text-3xl font-extrabold text-slate-800 tracking-tight">
+            My Files
+          </h1>
+          <p className="text-xs sm:text-sm text-slate-500 mt-1">
+            Manage your uploaded documents, view extracted OCR text, and control vault storage.
           </p>
         </div>
-        <div className="flex items-center gap-2.5">
+
+        <div className="flex items-center gap-2.5 self-start sm:self-auto">
           <button
             onClick={fetchFiles}
             disabled={loading}
-            className="p-2.5 rounded-xl bg-slate-900 border border-slate-800 text-slate-400 hover:text-white hover:bg-slate-800 transition text-xs flex items-center gap-1.5"
-            title="Refresh Files"
+            className="p-2.5 rounded-2xl bg-white border border-[#E2E8F0] text-slate-600 hover:text-slate-900 hover:bg-slate-50 transition shadow-subtle text-xs flex items-center gap-1.5"
+            title="Refresh list"
+            aria-label="Refresh files"
           >
-            <RefreshCw className={`w-4 h-4 ${loading ? 'animate-spin' : ''}`} />
-            <span className="hidden sm:inline">Refresh</span>
+            <RefreshCw className={`w-4 h-4 ${loading ? 'animate-spin text-[#A78BFA]' : ''}`} />
+            <span className="hidden sm:inline font-semibold">Refresh</span>
           </button>
+
           <Link
             to="/upload"
-            className="py-2.5 px-4 bg-brand-600 hover:bg-brand-500 text-white rounded-xl text-xs font-semibold shadow-md shadow-brand-600/20 transition"
+            className="inline-flex items-center gap-2 px-4 py-2.5 rounded-2xl bg-[#A78BFA] hover:bg-[#8B5CF6] text-white text-xs font-bold shadow-subtle hover:shadow-card transition"
           >
-            Upload Document
+            <UploadCloud className="w-4 h-4" />
+            <span>Upload File</span>
           </Link>
         </div>
       </div>
 
       {/* Filter and Search Bar */}
-      <div className="bg-slate-900/80 border border-slate-800 rounded-2xl p-4 backdrop-blur-sm">
+      <div className="bg-white border border-[#E2E8F0] rounded-3xl p-3 sm:p-4 shadow-subtle">
         <div className="relative max-w-md">
-          <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none text-slate-500">
+          <div className="absolute inset-y-0 left-0 pl-3.5 flex items-center pointer-events-none text-slate-400">
             <Search className="w-4 h-4" />
           </div>
           <input
             type="text"
-            value={searchFilter}
-            onChange={(e) => setSearchFilter(e.target.value)}
-            placeholder="Search by file name..."
-            className="w-full pl-9 pr-3.5 py-2 bg-slate-950/70 border border-slate-800 rounded-xl text-xs text-slate-200 placeholder-slate-500 focus:outline-none focus:border-brand-500 transition"
+            value={searchTerm}
+            onChange={(e) => setSearchTerm(e.target.value)}
+            placeholder="Search documents by name..."
+            className="w-full pl-10 pr-4 py-2.5 bg-[#F8F7FC] border border-[#E2E8F0] rounded-2xl text-xs sm:text-sm text-slate-800 placeholder-slate-400 focus:outline-none focus:border-[#A78BFA] focus:ring-2 focus:ring-[#A78BFA]/20 transition"
           />
         </div>
       </div>
 
       {error && (
-        <div className="p-4 rounded-xl bg-rose-500/10 border border-rose-500/20 text-rose-300 text-xs flex items-center gap-3">
-          <AlertCircle className="w-5 h-5 shrink-0 text-rose-400" />
+        <div className="p-4 rounded-2xl bg-[#FFF1F2] border border-[#FDA4AF] text-[#9F1239] text-xs flex items-center gap-3">
+          <AlertCircle className="w-5 h-5 shrink-0 text-[#E11D48]" />
           <span>{error}</span>
         </div>
       )}
 
-      {/* Files Table / Grid */}
-      <div className="bg-slate-900/80 border border-slate-800 rounded-2xl overflow-hidden backdrop-blur-sm shadow-xl">
+      {/* Files List Container */}
+      <div className="bg-white border border-[#E2E8F0] rounded-3xl overflow-hidden shadow-subtle">
         {loading ? (
-          <div className="py-16 text-center text-xs text-slate-400 flex flex-col items-center justify-center gap-3">
-            <Loader2 className="w-6 h-6 text-brand-500 animate-spin" />
-            <span>Loading documents...</span>
+          <div className="py-20 text-center flex flex-col items-center justify-center gap-3">
+            <Loader2 className="w-7 h-7 text-[#A78BFA] animate-spin" />
+            <p className="text-xs font-semibold text-slate-500">Loading documents...</p>
           </div>
         ) : filteredFiles.length === 0 ? (
-          <div className="py-16 text-center space-y-3">
-            <div className="w-12 h-12 rounded-2xl bg-slate-800/80 text-slate-500 flex items-center justify-center mx-auto">
-              <Files className="w-6 h-6" />
+          <div className="py-16 text-center space-y-3 px-4">
+            <div className="w-12 h-12 rounded-2xl bg-[#F8F7FC] text-slate-400 flex items-center justify-center mx-auto">
+              <FolderOpen className="w-6 h-6" />
             </div>
-            <p className="text-sm font-medium text-slate-300">No documents found</p>
-            <p className="text-xs text-slate-500 max-w-sm mx-auto">
-              {searchFilter
-                ? 'No documents matched your search filter.'
-                : 'Your vault is currently empty. Upload files to run OCR, embeddings, and RAG.'}
+            <p className="text-sm font-bold text-slate-700">
+              {searchTerm ? 'No matching documents' : 'No documents yet'}
             </p>
-            {!searchFilter && (
+            <p className="text-xs text-slate-500 max-w-sm mx-auto">
+              {searchTerm
+                ? 'Try different keywords or clear your search filter.'
+                : 'Upload your first document to start searching and asking questions.'}
+            </p>
+            {!searchTerm && (
               <Link
                 to="/upload"
-                className="inline-block mt-2 text-xs text-brand-400 hover:text-brand-300 font-semibold"
+                className="inline-block mt-2 px-4 py-2 rounded-xl bg-[#EDE9FE] text-[#7C3AED] text-xs font-bold hover:bg-[#DDD6FE] transition"
               >
-                Upload your first file &rarr;
+                Upload Document
               </Link>
             )}
           </div>
         ) : (
-          <div className="overflow-x-auto">
-            <table className="w-full text-left text-xs">
-              <thead>
-                <tr className="bg-slate-950/60 border-b border-slate-800/90 text-slate-400">
-                  <th className="py-3.5 px-4 font-semibold">Document Name</th>
-                  <th className="py-3.5 px-4 font-semibold">Format</th>
-                  <th className="py-3.5 px-4 font-semibold">Size</th>
-                  <th className="py-3.5 px-4 font-semibold">Status</th>
-                  <th className="py-3.5 px-4 font-semibold">Chunks</th>
-                  <th className="py-3.5 px-4 font-semibold">Uploaded</th>
-                  <th className="py-3.5 px-4 font-semibold text-right">Actions</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-slate-800/50">
-                {filteredFiles.map((file) => (
-                  <tr key={file.id} className="hover:bg-slate-800/30 transition">
-                    <td className="py-3.5 px-4 font-medium text-slate-200">
-                      <div className="flex items-center gap-2.5">
-                        <FileText className="w-4 h-4 text-brand-400 shrink-0" />
-                        <span className="truncate max-w-[200px] sm:max-w-xs">{file.original_filename}</span>
-                      </div>
-                    </td>
-                    <td className="py-3.5 px-4">
-                      <span className="uppercase text-[11px] font-mono text-slate-400 bg-slate-950 px-2 py-0.5 rounded border border-slate-800">
-                        {file.extension.replace('.', '')}
-                      </span>
-                    </td>
-                    <td className="py-3.5 px-4 text-slate-400">{formatBytes(file.size)}</td>
-                    <td className="py-3.5 px-4">
-                      <span
-                        className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[10px] font-semibold ${
-                          file.processing_status === 'completed'
-                            ? 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/20'
-                            : file.processing_status === 'failed'
-                            ? 'bg-rose-500/10 text-rose-400 border border-rose-500/20'
-                            : 'bg-amber-500/10 text-amber-400 border border-amber-500/20'
-                        }`}
-                      >
-                        {file.processing_status === 'completed' && <CheckCircle2 className="w-3 h-3" />}
-                        {file.processing_status === 'failed' && <XCircle className="w-3 h-3" />}
-                        {file.processing_status === 'uploaded' && <Clock className="w-3 h-3" />}
-                        {file.processing_status}
-                      </span>
-                    </td>
-                    <td className="py-3.5 px-4">
-                      <div className="flex items-center gap-1.5 text-slate-300">
-                        <Layers className="w-3.5 h-3.5 text-brand-400" />
-                        <span>{file.text_chunk_count || 0}</span>
-                      </div>
-                    </td>
-                    <td className="py-3.5 px-4 text-slate-500">
-                      {new Date(file.uploaded_at).toLocaleString()}
-                    </td>
-                    <td className="py-3.5 px-4 text-right">
-                      <button
-                        onClick={() => openFileDetails(file.id)}
-                        className="p-1.5 rounded-lg text-slate-400 hover:text-brand-300 hover:bg-brand-500/10 transition inline-flex items-center gap-1"
-                        title="View Extracted Text & Metadata"
-                      >
-                        <Eye className="w-4 h-4" />
-                        <span className="text-[11px] font-medium hidden sm:inline">Preview</span>
-                      </button>
-                    </td>
+          <>
+            {/* Desktop Table Layout */}
+            <div className="hidden md:block overflow-x-auto">
+              <table className="w-full text-left text-xs">
+                <thead>
+                  <tr className="bg-[#FAF8FF] border-b border-[#E2E8F0] text-slate-500 font-bold uppercase tracking-wider text-[11px]">
+                    <th className="py-4 px-5">Document</th>
+                    <th className="py-4 px-4">Format</th>
+                    <th className="py-4 px-4">Size</th>
+                    <th className="py-4 px-4">Status</th>
+                    <th className="py-4 px-4">Chunks</th>
+                    <th className="py-4 px-4">Uploaded</th>
+                    <th className="py-4 px-5 text-right">Actions</th>
                   </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
+                </thead>
+                <tbody className="divide-y divide-[#F1F5F9]">
+                  {filteredFiles.map((file) => (
+                    <tr key={file.id} className="hover:bg-[#F8F7FC] transition group">
+                      {/* Document Name */}
+                      <td className="py-3.5 px-5">
+                        <div className="flex items-center gap-3">
+                          <div className="w-9 h-9 rounded-xl bg-[#FAF8FF] border border-[#E2E8F0] flex items-center justify-center shrink-0">
+                            {getFileIcon(file.extension)}
+                          </div>
+                          <span className="font-semibold text-slate-800 truncate max-w-xs block">
+                            {file.original_filename}
+                          </span>
+                        </div>
+                      </td>
+
+                      {/* Format */}
+                      <td className="py-3.5 px-4">
+                        <span className="uppercase font-mono text-[10px] font-bold text-slate-600 bg-slate-100 px-2 py-0.5 rounded-md border border-slate-200">
+                          {(file.extension || '').replace('.', '')}
+                        </span>
+                      </td>
+
+                      {/* Size */}
+                      <td className="py-3.5 px-4 text-slate-600 font-medium">
+                        {formatBytes(file.size)}
+                      </td>
+
+                      {/* Status */}
+                      <td className="py-3.5 px-4">
+                        <span
+                          className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[10px] font-bold ${
+                            file.processing_status === 'completed'
+                              ? 'bg-[#F0FDF4] text-[#166534] border border-[#BBF7D0]'
+                              : file.processing_status === 'failed'
+                              ? 'bg-[#FFF1F2] text-[#9F1239] border border-[#FDA4AF]'
+                              : 'bg-[#FFF7ED] text-[#9A3412] border border-[#FED7AA]'
+                          }`}
+                        >
+                          {file.processing_status === 'completed' && <CheckCircle2 className="w-3 h-3 text-[#16A34A]" />}
+                          {file.processing_status === 'failed' && <XCircle className="w-3 h-3 text-[#E11D48]" />}
+                          {(file.processing_status === 'processing' || file.processing_status === 'uploaded') && (
+                            <Clock className="w-3 h-3 text-[#EA580C]" />
+                          )}
+                          <span>{file.processing_status === 'completed' ? 'Processed' : file.processing_status === 'failed' ? 'Failed' : 'Processing'}</span>
+                        </span>
+                      </td>
+
+                      {/* Chunks */}
+                      <td className="py-3.5 px-4 text-slate-600 font-medium">
+                        <span className="inline-flex items-center gap-1 text-slate-500">
+                          <Layers className="w-3.5 h-3.5 text-[#A78BFA]" />
+                          <span>{file.text_chunk_count || 0}</span>
+                        </span>
+                      </td>
+
+                      {/* Upload Date */}
+                      <td className="py-3.5 px-4 text-slate-500">
+                        {new Date(file.uploaded_at).toLocaleDateString()}
+                      </td>
+
+                      {/* Four Functional Actions: OPEN, VIEW, DOWNLOAD, DELETE */}
+                      <td className="py-3.5 px-5 text-right">
+                        <div className="inline-flex items-center gap-1">
+                          {/* OPEN */}
+                          <button
+                            onClick={() => handleOpen(file)}
+                            className="p-1.5 rounded-xl text-slate-500 hover:text-[#7C3AED] hover:bg-[#EDE9FE] transition"
+                            title="Open in new tab"
+                            aria-label={`Open ${file.original_filename} in new tab`}
+                          >
+                            <ExternalLink className="w-4 h-4" />
+                          </button>
+
+                          {/* VIEW */}
+                          <button
+                            onClick={() => handleView(file)}
+                            className="p-1.5 rounded-xl text-slate-500 hover:text-[#7C3AED] hover:bg-[#EDE9FE] transition"
+                            title="View document preview"
+                            aria-label={`Preview ${file.original_filename}`}
+                          >
+                            <Eye className="w-4 h-4" />
+                          </button>
+
+                          {/* DOWNLOAD */}
+                          <button
+                            onClick={() => handleDownload(file)}
+                            className="p-1.5 rounded-xl text-slate-500 hover:text-[#7C3AED] hover:bg-[#EDE9FE] transition"
+                            title="Download original file"
+                            aria-label={`Download ${file.original_filename}`}
+                          >
+                            <Download className="w-4 h-4" />
+                          </button>
+
+                          {/* DELETE */}
+                          <button
+                            onClick={() => handleDeletePrompt(file)}
+                            className="p-1.5 rounded-xl text-slate-400 hover:text-[#E11D48] hover:bg-[#FFF1F2] transition"
+                            title="Delete file"
+                            aria-label={`Delete ${file.original_filename}`}
+                          >
+                            <Trash2 className="w-4 h-4" />
+                          </button>
+                        </div>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+
+            {/* Mobile Cards Layout */}
+            <div className="md:hidden divide-y divide-[#F1F5F9] p-2">
+              {filteredFiles.map((file) => (
+                <div key={file.id} className="p-4 space-y-3">
+                  <div className="flex items-start justify-between gap-3">
+                    <div className="flex items-center gap-3 min-w-0">
+                      <div className="w-10 h-10 rounded-2xl bg-[#FAF8FF] border border-[#E2E8F0] flex items-center justify-center shrink-0">
+                        {getFileIcon(file.extension)}
+                      </div>
+                      <div className="min-w-0">
+                        <p className="font-bold text-slate-800 text-xs truncate">
+                          {file.original_filename}
+                        </p>
+                        <p className="text-[11px] text-slate-400 mt-0.5">
+                          {formatBytes(file.size)} • {(file.extension || '').toUpperCase()}
+                        </p>
+                      </div>
+                    </div>
+
+                    <span
+                      className={`px-2.5 py-0.5 rounded-full text-[10px] font-bold shrink-0 ${
+                        file.processing_status === 'completed'
+                          ? 'bg-[#F0FDF4] text-[#166534] border border-[#BBF7D0]'
+                          : file.processing_status === 'failed'
+                          ? 'bg-[#FFF1F2] text-[#9F1239] border border-[#FDA4AF]'
+                          : 'bg-[#FFF7ED] text-[#9A3412] border border-[#FED7AA]'
+                      }`}
+                    >
+                      {file.processing_status === 'completed' ? 'Processed' : file.processing_status === 'failed' ? 'Failed' : 'Processing'}
+                    </span>
+                  </div>
+
+                  <div className="flex items-center justify-between text-[11px] text-slate-500 pt-1">
+                    <span>Uploaded {new Date(file.uploaded_at).toLocaleDateString()}</span>
+                    <span>{file.text_chunk_count || 0} chunks</span>
+                  </div>
+
+                  {/* Actions Bar for Mobile */}
+                  <div className="flex items-center justify-between pt-2 border-t border-slate-100">
+                    <button
+                      onClick={() => handleView(file)}
+                      className="inline-flex items-center gap-1 text-xs font-bold text-[#7C3AED] px-2 py-1 rounded-lg hover:bg-[#EDE9FE]"
+                    >
+                      <Eye className="w-3.5 h-3.5" />
+                      <span>View</span>
+                    </button>
+
+                    <button
+                      onClick={() => handleOpen(file)}
+                      className="inline-flex items-center gap-1 text-xs font-bold text-slate-600 px-2 py-1 rounded-lg hover:bg-slate-100"
+                    >
+                      <ExternalLink className="w-3.5 h-3.5" />
+                      <span>Open</span>
+                    </button>
+
+                    <button
+                      onClick={() => handleDownload(file)}
+                      className="inline-flex items-center gap-1 text-xs font-bold text-slate-600 px-2 py-1 rounded-lg hover:bg-slate-100"
+                    >
+                      <Download className="w-3.5 h-3.5" />
+                      <span>Download</span>
+                    </button>
+
+                    <button
+                      onClick={() => handleDeletePrompt(file)}
+                      className="inline-flex items-center gap-1 text-xs font-bold text-[#E11D48] px-2 py-1 rounded-lg hover:bg-[#FFF1F2]"
+                    >
+                      <Trash2 className="w-3.5 h-3.5" />
+                      <span>Delete</span>
+                    </button>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </>
         )}
       </div>
 
-      {/* File Detail Modal / Preview Drawer */}
-      {selectedFileId && (
-        <div className="fixed inset-0 bg-black/70 backdrop-blur-sm z-50 flex items-center justify-center p-4">
-          <div className="bg-slate-900 border border-slate-800 rounded-2xl w-full max-w-3xl max-h-[90vh] flex flex-col shadow-2xl overflow-hidden">
-            {/* Header */}
-            <div className="p-4 sm:p-5 border-b border-slate-800 flex items-center justify-between">
-              <div className="flex items-center gap-2.5">
-                <FileText className="w-5 h-5 text-brand-400" />
-                <div>
-                  <h3 className="text-sm font-semibold text-white truncate max-w-md">
-                    {fileDetails ? fileDetails.original_filename : 'Document Details'}
-                  </h3>
-                  <p className="text-[11px] text-slate-400">
-                    File ID #{selectedFileId} • Secure Vault Inspection
-                  </p>
-                </div>
-              </div>
-              <button
-                onClick={closeDetails}
-                className="p-1.5 rounded-lg text-slate-400 hover:text-white hover:bg-slate-800 transition"
-              >
-                <X className="w-5 h-5" />
-              </button>
-            </div>
+      {/* In-App Document Preview Modal */}
+      {previewFile && (
+        <FilePreviewModal
+          file={previewFile}
+          isOpen={Boolean(previewFile)}
+          onClose={() => setPreviewFile(null)}
+          onDownload={handleDownload}
+          onOpenTab={handleOpen}
+        />
+      )}
 
-            {/* Content Body */}
-            <div className="p-4 sm:p-6 overflow-y-auto space-y-4 flex-1">
-              {loadingDetails ? (
-                <div className="py-16 text-center text-xs text-slate-400 flex flex-col items-center justify-center gap-3">
-                  <Loader2 className="w-6 h-6 text-brand-500 animate-spin" />
-                  <span>Loading document metadata and extracted text...</span>
-                </div>
-              ) : detailsError ? (
-                <div className="p-4 rounded-xl bg-rose-500/10 border border-rose-500/20 text-rose-300 text-xs">
-                  {detailsError}
-                </div>
-              ) : fileDetails ? (
-                <>
-                  {/* Metadata Chips */}
-                  <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-                    <div className="p-3 rounded-xl bg-slate-950/70 border border-slate-800">
-                      <span className="text-[10px] text-slate-500 uppercase block font-semibold">Format</span>
-                      <span className="text-xs font-semibold text-slate-200 mt-0.5 block">
-                        {fileDetails.extension} ({fileDetails.mime_type})
-                      </span>
-                    </div>
-                    <div className="p-3 rounded-xl bg-slate-950/70 border border-slate-800">
-                      <span className="text-[10px] text-slate-500 uppercase block font-semibold">Size</span>
-                      <span className="text-xs font-semibold text-slate-200 mt-0.5 block">
-                        {formatBytes(fileDetails.size)}
-                      </span>
-                    </div>
-                    <div className="p-3 rounded-xl bg-slate-950/70 border border-slate-800">
-                      <span className="text-[10px] text-slate-500 uppercase block font-semibold">Chunks Indexed</span>
-                      <span className="text-xs font-semibold text-brand-400 mt-0.5 block">
-                        {fileDetails.text_chunk_count} chunks
-                      </span>
-                    </div>
-                    <div className="p-3 rounded-xl bg-slate-950/70 border border-slate-800">
-                      <span className="text-[10px] text-slate-500 uppercase block font-semibold">Processing</span>
-                      <span className="text-xs font-semibold text-emerald-400 mt-0.5 uppercase block">
-                        {fileDetails.processing_status}
-                      </span>
-                    </div>
-                  </div>
-
-                  {fileDetails.error_message && (
-                    <div className="p-3 rounded-xl bg-rose-500/10 border border-rose-500/20 text-rose-300 text-xs">
-                      <span className="font-semibold block mb-0.5">Error Notice:</span>
-                      {fileDetails.error_message}
-                    </div>
-                  )}
-
-                  {/* Extracted Text Section */}
-                  <div className="space-y-2">
-                    <div className="flex items-center justify-between">
-                      <h4 className="text-xs font-semibold text-slate-300 uppercase tracking-wider">
-                        Extracted Text (OCR / Parsed)
-                      </h4>
-                      <span className="text-[11px] text-slate-500">
-                        {fileDetails.extracted_text ? `${fileDetails.extracted_text.length} characters` : 'No text'}
-                      </span>
-                    </div>
-
-                    <div className="p-4 rounded-xl bg-slate-950 border border-slate-800/80 font-mono text-xs text-slate-300 whitespace-pre-wrap max-h-72 overflow-y-auto leading-relaxed selection:bg-brand-500/40">
-                      {fileDetails.extracted_text || (
-                        <span className="text-slate-600 italic">No text content was extracted for this file.</span>
-                      )}
-                    </div>
-                  </div>
-
-                  {/* Security Notice */}
-                  <div className="p-3 rounded-xl bg-slate-950/50 border border-slate-800 text-[11px] text-slate-500">
-                    <span className="font-semibold text-slate-400 block mb-0.5">Security Notice:</span>
-                    Original physical server paths are protected by backend isolation. Only user-sanitized metadata and parsed text are returned.
-                  </div>
-                </>
-              ) : null}
-            </div>
-
-            {/* Footer */}
-            <div className="p-4 border-t border-slate-800 flex justify-end">
-              <button
-                onClick={closeDetails}
-                className="py-2 px-4 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-medium transition"
-              >
-                Close
-              </button>
-            </div>
-          </div>
-        </div>
+      {/* Delete Confirmation Modal */}
+      {deleteTargetFile && (
+        <DeleteModal
+          isOpen={Boolean(deleteTargetFile)}
+          filename={deleteTargetFile.original_filename}
+          onConfirm={confirmDelete}
+          onCancel={() => setDeleteTargetFile(null)}
+          deleting={deleting}
+        />
       )}
     </div>
   );

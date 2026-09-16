@@ -4,29 +4,49 @@
 
 @layer base {
   :root {
-    color-scheme: dark;
+    color-scheme: light;
   }
   
   body {
-    @apply bg-slate-950 text-slate-100 font-sans antialiased min-h-screen selection:bg-brand-500/30 selection:text-brand-200;
+    background-color: #F8F7FC;
+    color: #334155;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+    min-height: 100vh;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+  }
+
+  ::selection {
+    background-color: #EDE9FE;
+    color: #5B21B6;
   }
 }
 
-/* Custom modern scrollbar */
+/* Polished subtle pastel scrollbar */
 ::-webkit-scrollbar {
-  width: 8px;
-  height: 8px;
+  width: 7px;
+  height: 7px;
 }
 
 ::-webkit-scrollbar-track {
-  background: #0f172a;
+  background: #F1F0F7;
 }
 
 ::-webkit-scrollbar-thumb {
-  background: #334155;
-  border-radius: 4px;
+  background: #CBD5E1;
+  border-radius: 9999px;
 }
 
 ::-webkit-scrollbar-thumb:hover {
-  background: #475569;
+  background: #94A3B8;
+}
+
+/* Animations */
+@keyframes fadeIn {
+  from { opacity: 0; transform: translateY(4px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+.animate-fade-in {
+  animation: fadeIn 0.2s ease-out forwards;
 }
