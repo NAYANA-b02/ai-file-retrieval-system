@@ -13,32 +13,79 @@ from app.core.config import settings
 logger = logging.getLogger(__name__)
 
 
-def _configure_tesseract() -> None:
+def _configure_tesseract() -> Optional[str]:
     """
     Configures pytesseract with the configured Tesseract binary path
-    or discovers it from system PATH and standard Linux/Mac paths.
+    or discovers it from system PATH and standard Linux/Mac/Windows paths.
+    Returns the resolved path, or None if not found.
     """
+    resolved_path: Optional[str] = None
+
+    # 1. Configured TESSERACT_CMD if existing
     if settings.TESSERACT_CMD and os.path.exists(settings.TESSERACT_CMD):
-        pytesseract.pytesseract.tesseract_cmd = settings.TESSERACT_CMD
-        return
+        resolved_path = settings.TESSERACT_CMD
 
-    # Check if tesseract is in PATH
-    which_tesseract = shutil.which("tesseract")
-    if which_tesseract:
-        pytesseract.pytesseract.tesseract_cmd = which_tesseract
-        return
+    # 2. Check if tesseract is in PATH
+    if not resolved_path:
+        which_tesseract = shutil.which("tesseract")
+        if which_tesseract:
+            resolved_path = which_tesseract
 
-    # Check standard Linux/Unix installations
-    standard_paths = [
-        "/usr/bin/tesseract",
-        "/usr/local/bin/tesseract",
-        "/opt/homebrew/bin/tesseract",
-        "/var/lib/apt/lists/tesseract",
-    ]
-    for p in standard_paths:
-        if os.path.exists(p):
-            pytesseract.pytesseract.tesseract_cmd = p
-            return
+    # 3. Check standard Linux/Unix/Mac/Container installations
+    if not resolved_path:
+        standard_paths = [
+            "/usr/bin/tesseract",
+            "/usr/local/bin/tesseract",
+            "/opt/homebrew/bin/tesseract",
+            os.path.expanduser("~/.local/usr/bin/tesseract"),
+            os.path.expanduser("~/.local/bin/tesseract"),
+            r"C:\Program Files\Tesseract-OCR\tesseract.exe",
+            r"C:\Program Files (x86)\Tesseract-OCR\tesseract.exe",
+        ]
+        for p in standard_paths:
+            if os.path.exists(p):
+                resolved_path = p
+                break
+
+    if resolved_path:
+        pytesseract.pytesseract.tesseract_cmd = resolved_path
+
+        # Also set TESSDATA_PREFIX if not explicitly configured in environment
+        if "TESSDATA_PREFIX" not in os.environ:
+            tessdata_candidates = [
+                "/usr/share/tesseract-ocr/5/tessdata",
+                "/usr/share/tesseract-ocr/4.00/tessdata",
+                "/usr/share/tessdata",
+                "/usr/local/share/tessdata",
+                os.path.expanduser("~/.local/usr/share/tesseract-ocr/5/tessdata"),
+                r"C:\Program Files\Tesseract-OCR\tessdata",
+            ]
+            for td in tessdata_candidates:
+                if os.path.isdir(td):
+                    os.environ["TESSDATA_PREFIX"] = td
+                    break
+
+        return resolved_path
+
+    return None
+
+
+def verify_tesseract_installation() -> tuple[Optional[str], Optional[str]]:
+    """
+    Verifies that Tesseract is discovered and executable.
+    Returns (binary_path, version_string) or (None, None).
+    """
+    path = _configure_tesseract()
+    if not path:
+        return None, None
+    try:
+        import subprocess
+        res = subprocess.run([path, "--version"], capture_output=True, text=True, timeout=5)
+        first_line = res.stdout.splitlines()[0] if res.stdout else "available"
+        return path, first_line.strip()
+    except Exception as e:
+        logger.debug("Failed running tesseract --version: %s", e)
+        return path, "available"
 
 
 def extract_text_from_image_ocr(file_bytes: bytes) -> str:

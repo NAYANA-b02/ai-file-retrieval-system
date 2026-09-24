@@ -1,12 +1,15 @@
 FROM python:3.11-slim
 
-# Install system dependencies including Tesseract OCR
-RUN apt-get update && apt-get install -y \
+# Install system dependencies including Tesseract OCR and English language data
+RUN apt-get update && apt-get install -y --no-install-recommends \
     tesseract-ocr \
     tesseract-ocr-eng \
     libtesseract-dev \
     gcc \
     && rm -rf /var/lib/apt/lists/*
+
+# Production build verification: confirm Tesseract binary and language models exist
+RUN tesseract --version && tesseract --list-langs
 
 WORKDIR /app
 

@@ -42,6 +42,9 @@ class SearchResultItem(BaseModel):
     mime_type: Optional[str] = None
     uploaded_at: Optional[datetime] = None
     highlight_ranges: List[HighlightRange] = Field(default_factory=list)
+    start_line: Optional[int] = None
+    end_line: Optional[int] = None
+    page_number: Optional[int] = None
 
     model_config = ConfigDict(from_attributes=True)
 

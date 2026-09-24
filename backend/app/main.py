@@ -19,6 +19,8 @@ try:
 except Exception as e:
     print(f"Notice: Database table initialization skipped or deferred: {e}")
 
+logger = logging.getLogger("app.main")
+
 app = FastAPI(
     title=settings.APP_NAME,
     version="1.0.0",
@@ -26,6 +28,19 @@ app = FastAPI(
     docs_url="/docs",
     redoc_url="/redoc",
 )
+
+
+@app.on_event("startup")
+def startup_checks():
+    from app.services.text_extraction_service import verify_tesseract_installation
+    tess_path, tess_ver = verify_tesseract_installation()
+    if tess_path:
+        logger.info("Tesseract OCR verified: %s (%s)", tess_path, tess_ver)
+    else:
+        logger.warning(
+            "Tesseract binary not found. OCR cannot be performed on images or scanned PDFs. "
+            "Ensure tesseract-ocr is installed or TESSERACT_CMD is set."
+        )
 
 # Configure CORS
 origins = [origin.strip() for origin in settings.FRONTEND_ORIGIN.split(",") if origin.strip()]

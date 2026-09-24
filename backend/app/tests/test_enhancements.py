@@ -210,5 +210,102 @@ class TestVisualItemSchema(unittest.TestCase):
         self.assertIsNone(vi.caption)
 
 
+
+
+class TestTesseractDiscovery(unittest.TestCase):
+    """Tests for Tesseract OCR discovery and verification"""
+
+    def test_configure_tesseract_discovery(self):
+        from app.services.text_extraction_service import _configure_tesseract
+        path = _configure_tesseract()
+        # In this environment, Tesseract is installed and should be resolved
+        self.assertIsNotNone(path)
+        self.assertTrue(os.path.exists(path))
+
+    def test_verify_tesseract_installation(self):
+        from app.services.text_extraction_service import verify_tesseract_installation
+        path, version = verify_tesseract_installation()
+        self.assertIsNotNone(path)
+        self.assertIsNotNone(version)
+        self.assertIn("tesseract", version.lower())
+
+
+class TestChunkLineAndPageMetadata(unittest.TestCase):
+    """Tests for compute_chunk_metadata and line/page exposure in SearchResultItem"""
+
+    def test_compute_chunk_metadata_multiline(self):
+        from app.services.search_service import compute_chunk_metadata
+        from app.models.file import File
+
+        sample_text = "\n".join([f"Line number {i} with some content." for i in range(1, 101)])
+        file_record = File(
+            id=10,
+            original_filename="sample.txt",
+            extension=".txt",
+            extracted_text=sample_text,
+        )
+
+        chunk_snippet = "\n".join([f"Line number {i} with some content." for i in range(25, 30)])
+        start_l, end_l, page = compute_chunk_metadata(file_record, chunk_snippet, chunk_index=0)
+
+        self.assertEqual(start_l, 25)
+        self.assertEqual(end_l, 29)
+        self.assertIsNone(page)
+
+    def test_compute_chunk_metadata_single_line(self):
+        from app.services.search_service import compute_chunk_metadata
+        from app.models.file import File
+
+        sample_text = "First line\nSecond line target\nThird line"
+        file_record = File(
+            id=11,
+            original_filename="notes.txt",
+            extension=".txt",
+            extracted_text=sample_text,
+        )
+
+        start_l, end_l, page = compute_chunk_metadata(file_record, "Second line target", chunk_index=0)
+        self.assertEqual(start_l, 2)
+        self.assertEqual(end_l, 2)
+        self.assertIsNone(page)
+
+    def test_compute_chunk_metadata_pdf_with_formfeed(self):
+        from app.services.search_service import compute_chunk_metadata
+        from app.models.file import File
+
+        page1_text = "Page 1 content here.\nMore text on page 1."
+        page2_text = "Page 2 content begins here.\nImportant data on page 2."
+        sample_text = page1_text + "\x0c" + page2_text
+
+        file_record = File(
+            id=12,
+            original_filename="report.pdf",
+            extension=".pdf",
+            extracted_text=sample_text,
+        )
+
+        start_l, end_l, page = compute_chunk_metadata(file_record, "Important data on page 2.", chunk_index=0)
+        self.assertEqual(page, 2)
+        self.assertIsNotNone(start_l)
+
+    def test_search_result_item_line_and_page_fields(self):
+        from app.schemas.search import SearchResultItem
+        item = SearchResultItem(
+            chunk_id=1,
+            chunk_index=10,
+            chunk_text="Retrieved chunk text",
+            file_id=1,
+            original_filename="report.pdf",
+            similarity_score=0.92,
+            start_line=125,
+            end_line=132,
+            page_number=4,
+        )
+        self.assertEqual(item.start_line, 125)
+        self.assertEqual(item.end_line, 132)
+        self.assertEqual(item.page_number, 4)
+        self.assertEqual(item.chunk_index, 10)
+
+
 if __name__ == "__main__":
     unittest.main()

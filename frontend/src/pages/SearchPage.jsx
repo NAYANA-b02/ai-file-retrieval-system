@@ -21,7 +21,9 @@ import FilePreviewModal from '../components/FilePreviewModal';
 
 /**
  * Renders chunk text with highlighted spans using backend-computed highlight_ranges.
- * No dangerouslySetInnerHTML — purely safe React elements.
+ * Uses interval segmentation so both keyword and semantic highlights are visible
+ * simultaneously without either swallowing the other.
+ * Zero dangerouslySetInnerHTML — purely safe React elements.
  */
 function HighlightedText({ text, highlightRanges }) {
   if (!text) return <span className="text-slate-500 italic">No text snippet available.</span>;
@@ -29,42 +31,97 @@ function HighlightedText({ text, highlightRanges }) {
     return <span>{text}</span>;
   }
 
-  // Sort ranges by start position and merge overlapping
-  const sorted = [...highlightRanges].sort((a, b) => a.start - b.start);
-  const merged = [];
-  for (const range of sorted) {
-    if (range.start >= text.length) continue;
-    const clamped = { start: Math.max(0, range.start), end: Math.min(text.length, range.end), type: range.type };
-    if (merged.length > 0 && clamped.start <= merged[merged.length - 1].end) {
-      merged[merged.length - 1].end = Math.max(merged[merged.length - 1].end, clamped.end);
-      // Prefer 'semantic' type if either is semantic
-      if (clamped.type === 'semantic') merged[merged.length - 1].type = 'semantic';
-    } else {
-      merged.push({ ...clamped });
-    }
+  // Filter and clamp valid ranges to text bounds
+  const valid = highlightRanges
+    .map(r => ({
+      start: Math.max(0, Math.min(text.length, r.start)),
+      end: Math.max(0, Math.min(text.length, r.end)),
+      type: r.type,
+    }))
+    .filter(r => r.start < r.end);
+
+  if (valid.length === 0) {
+    return <span>{text}</span>;
   }
 
-  const parts = [];
-  let cursor = 0;
-  merged.forEach((range, i) => {
-    if (cursor < range.start) {
-      parts.push(<span key={`t-${i}`}>{text.slice(cursor, range.start)}</span>);
-    }
-    const highlightClass = range.type === 'semantic'
-      ? 'bg-[#DDD6FE] text-[#5B21B6] rounded-sm px-0.5 font-semibold'
-      : 'bg-[#FDE68A] text-[#92400E] rounded-sm px-0.5 font-semibold';
-    parts.push(
-      <mark key={`h-${i}`} className={highlightClass}>
-        {text.slice(range.start, range.end)}
-      </mark>
-    );
-    cursor = range.end;
+  // Collect boundary points
+  const points = new Set([0, text.length]);
+  valid.forEach(r => {
+    points.add(r.start);
+    points.add(r.end);
   });
-  if (cursor < text.length) {
-    parts.push(<span key="tail">{text.slice(cursor)}</span>);
+
+  const sortedPoints = Array.from(points).sort((a, b) => a - b);
+  const segments = [];
+
+  for (let i = 0; i < sortedPoints.length - 1; i++) {
+    const start = sortedPoints[i];
+    const end = sortedPoints[i + 1];
+    if (start >= end) continue;
+
+    const slice = text.slice(start, end);
+    const hasKeyword = valid.some(r => r.type === 'keyword' && r.start <= start && r.end >= end);
+    const hasSemantic = valid.some(r => r.type === 'semantic' && r.start <= start && r.end >= end);
+
+    let type = 'none';
+    if (hasKeyword && hasSemantic) type = 'both';
+    else if (hasKeyword) type = 'keyword';
+    else if (hasSemantic) type = 'semantic';
+
+    segments.push({ start, end, text: slice, type });
   }
 
-  return <>{parts}</>;
+  // Merge adjacent segments with identical types
+  const merged = [];
+  for (const seg of segments) {
+    if (merged.length > 0 && merged[merged.length - 1].type === seg.type) {
+      merged[merged.length - 1].end = seg.end;
+      merged[merged.length - 1].text += seg.text;
+    } else {
+      merged.push({ ...seg });
+    }
+  }
+
+  return (
+    <>
+      {merged.map((seg, i) => {
+        if (seg.type === 'both') {
+          return (
+            <mark
+              key={`seg-${i}`}
+              className="bg-[#FDE68A] text-[#92400E] rounded-sm px-1 font-bold shadow-xs ring-1 ring-[#7C3AED]"
+              title="Keyword match in semantic passage"
+            >
+              {seg.text}
+            </mark>
+          );
+        }
+        if (seg.type === 'keyword') {
+          return (
+            <mark
+              key={`seg-${i}`}
+              className="bg-[#FDE68A] text-[#92400E] rounded-sm px-1 font-semibold"
+              title="Keyword match"
+            >
+              {seg.text}
+            </mark>
+          );
+        }
+        if (seg.type === 'semantic') {
+          return (
+            <mark
+              key={`seg-${i}`}
+              className="bg-[#DDD6FE] text-[#5B21B6] rounded-sm px-1 font-semibold"
+              title="Semantic match"
+            >
+              {seg.text}
+            </mark>
+          );
+        }
+        return <span key={`seg-${i}`}>{seg.text}</span>;
+      })}
+    </>
+  );
 }
 
 export default function SearchPage() {
@@ -431,14 +488,14 @@ export default function SearchPage() {
                       </div>
                     </div>
 
-                    {/* Excerpt Body with Highlighted Text */}
-                    <div className="p-3.5 rounded-2xl bg-[#F8F7FC] border border-[#E2E8F0] text-xs text-slate-700 font-sans leading-relaxed selection:bg-[#EDE9FE]">
-                      <p className="whitespace-pre-wrap line-clamp-6">
+                    {/* Excerpt Body with Highlighted Text (Entire chunk displayed without truncation) */}
+                    <div className="p-4 rounded-2xl bg-[#F8F7FC] border border-[#E2E8F0] text-xs text-slate-700 font-sans leading-relaxed selection:bg-[#EDE9FE]">
+                      <div className="whitespace-pre-wrap break-words">
                         <HighlightedText
                           text={item.chunk_text || item.text || ''}
                           highlightRanges={item.highlight_ranges}
                         />
-                      </p>
+                      </div>
                     </div>
 
                     {/* Highlight Legend (only if highlights exist) */}
@@ -459,11 +516,39 @@ export default function SearchPage() {
                       </div>
                     )}
 
-                    {/* Metadata footer */}
-                    <div className="flex items-center gap-2 text-[11px] text-slate-400">
-                      {item.chunk_index !== undefined && (
-                        <span>Chunk #{item.chunk_index + 1}</span>
-                      )}
+                    {/* Metadata footer: Page / Lines / Chunk indicators */}
+                    <div className="flex items-center gap-2 text-[11px] text-slate-500 font-medium">
+                      {(() => {
+                        const parts = [];
+                        let lineStr = null;
+                        if (item.start_line && item.end_line) {
+                          lineStr = item.start_line === item.end_line
+                            ? `Line ${item.start_line}`
+                            : `Lines ${item.start_line}–${item.end_line}`;
+                        } else if (item.start_line) {
+                          lineStr = `Line ${item.start_line}`;
+                        }
+
+                        if (item.page_number) {
+                          parts.push(`Page ${item.page_number}`);
+                          if (lineStr) parts.push(lineStr);
+                          if (item.chunk_index !== undefined && item.chunk_index !== null) {
+                            parts.push(`Chunk #${item.chunk_index + 1}`);
+                          }
+                        } else {
+                          if (item.chunk_index !== undefined && item.chunk_index !== null) {
+                            parts.push(`Chunk #${item.chunk_index + 1}`);
+                          }
+                          if (lineStr) parts.push(lineStr);
+                        }
+
+                        return parts.map((part, pIdx) => (
+                          <React.Fragment key={pIdx}>
+                            {pIdx > 0 && <span className="text-slate-300">•</span>}
+                            <span>{part}</span>
+                          </React.Fragment>
+                        ));
+                      })()}
                     </div>
                   </div>
                 );
