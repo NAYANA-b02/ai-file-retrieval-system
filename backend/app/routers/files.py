@@ -129,7 +129,19 @@ async def upload_file(
             error_message=safe_error,
         )
 
+    # 5.b Document Visual Extraction (Embedded images and vector diagram pages)
+    try:
+        from app.services.visual_service import extract_and_store_document_visuals
+        extract_and_store_document_visuals(
+            db=db,
+            file_record=file_record,
+            file_bytes=file_bytes,
+        )
+    except Exception as e:
+        logger.warning("Visual extraction failed non-fatally for file_id=%d: %s", file_record.id, e)
+
     db.refresh(file_record)
+
 
     # 6. Phase 5: Asynchronous Background Text Chunking & Embedding
     if extraction_succeeded and has_meaningful_text:
@@ -224,6 +236,51 @@ def get_file_content(
         content=content,
         media_type=file_record.mime_type or "application/octet-stream",
         headers=headers,
+    )
+
+
+@router.get("/{file_id}/visuals/{visual_id}")
+def get_document_visual(
+    file_id: int,
+    visual_id: int,
+    current_user: User = Depends(get_current_user),
+    db: DBSession = Depends(get_db),
+):
+    """
+    Streams extracted visual bytes (original diagram or image) for a document.
+    Strictly enforces document ownership: returns 404 if file does not exist,
+    belongs to another user, or visual does not exist.
+    Never exposes physical filesystem paths.
+    """
+    from app.models.document_visual import DocumentVisual
+
+    file_record = (
+        db.query(FileModel)
+        .filter(FileModel.id == file_id, FileModel.owner_id == current_user.id)
+        .first()
+    )
+    if not file_record:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="File not found"
+        )
+
+    visual = (
+        db.query(DocumentVisual)
+        .filter(DocumentVisual.id == visual_id, DocumentVisual.file_id == file_id)
+        .first()
+    )
+    if not visual:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="Visual not found"
+        )
+
+    content = get_file_bytes(visual)
+    return Response(
+        content=content,
+        media_type=visual.mime_type or "image/png",
+        headers={"Cache-Control": "private, max-age=3600"},
     )
 
 

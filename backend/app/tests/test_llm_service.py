@@ -42,7 +42,7 @@ class TestLLMService(unittest.TestCase):
         """When LLM_PROVIDER is 'groq', call_llm_chat sends valid POST to Groq endpoint."""
         settings.LLM_PROVIDER = "groq"
         settings.GROQ_API_KEY = "gsk_mock_valid_api_key_12345"
-        settings.GROQ_MODEL = "llama-3.3-70b-versatile"
+        settings.GROQ_MODEL = "openai/gpt-oss-120b"
 
         mock_resp = MagicMock()
         mock_resp.status_code = 200
@@ -69,7 +69,7 @@ class TestLLMService(unittest.TestCase):
         self.assertEqual(call_args[0], GROQ_ENDPOINT)
         self.assertEqual(call_kwargs["headers"]["Authorization"], "Bearer gsk_mock_valid_api_key_12345")
         self.assertEqual(call_kwargs["headers"]["Content-Type"], "application/json")
-        self.assertEqual(call_kwargs["json"]["model"], "llama-3.3-70b-versatile")
+        self.assertEqual(call_kwargs["json"]["model"], "openai/gpt-oss-120b")
         self.assertEqual(call_kwargs["json"]["messages"], self.messages)
         self.assertEqual(call_kwargs["json"]["temperature"], 0.1)
         self.assertFalse(call_kwargs["json"]["stream"])

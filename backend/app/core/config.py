@@ -54,7 +54,7 @@ class Settings(BaseSettings):
 
     LLM_PROVIDER: str = "ollama"
     GROQ_API_KEY: Optional[str] = None
-    GROQ_MODEL: str = "llama-3.3-70b-versatile"
+    GROQ_MODEL: str = "openai/gpt-oss-120b"
     GROQ_TIMEOUT_SECONDS: int = 30
 
     model_config = SettingsConfigDict(

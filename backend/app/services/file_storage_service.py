@@ -2,7 +2,7 @@ import logging
 import os
 import uuid
 from pathlib import Path
-from typing import Tuple, Optional
+from typing import Tuple, Optional, Any
 import httpx
 from sqlalchemy.orm import Session
 from fastapi import HTTPException, status
@@ -188,13 +188,20 @@ def update_file_processing_result(
     return file_record
 
 
-def get_file_bytes(file_record: File) -> bytes:
+def get_file_bytes(file_record: Any) -> bytes:
     """
     Retrieves raw file content bytes from either Supabase Storage or local private upload dir.
+    Accepts File model, DocumentVisual model, or raw storage_path string.
     Never exposes physical filesystem paths or storage credentials in exceptions.
     """
-    storage_path = file_record.file_path or ""
+    if isinstance(file_record, str):
+        storage_path = file_record
+    elif hasattr(file_record, "storage_path") and file_record.storage_path:
+        storage_path = file_record.storage_path
+    else:
+        storage_path = getattr(file_record, "file_path", "") or ""
     if storage_path.startswith("supabase://"):
+
         if not settings.SUPABASE_URL or not settings.SUPABASE_SECRET_KEY:
             raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,

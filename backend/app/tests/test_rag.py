@@ -11,6 +11,7 @@ from app.core.database import SessionLocal
 from app.models.user import User
 from app.models.audit_log import AuditLog
 from app.services.ollama_service import call_ollama_chat
+from app.services.llm_service import call_llm_chat
 
 
 class TestPhase8RAG(unittest.TestCase):
@@ -82,7 +83,7 @@ class TestPhase8RAG(unittest.TestCase):
             cookies={settings.SESSION_COOKIE_NAME: session_id},
         )
 
-    @patch("app.services.rag_service.call_ollama_chat")
+    @patch("app.services.rag_service.call_llm_chat")
     def test_01_authenticated_rag_ask_success(self, mock_ollama):
         """Authenticated RAG request succeeds with grounded answer and citations."""
         mock_ollama.return_value = "The speed of light in vacuum is approximately 299,792,458 meters per second."
@@ -112,7 +113,7 @@ class TestPhase8RAG(unittest.TestCase):
         self.assertIn("snippet", first_cite)
         mock_ollama.assert_called_once()
 
-    @patch("app.services.rag_service.call_ollama_chat")
+    @patch("app.services.rag_service.call_llm_chat")
     def test_02_ownership_isolation(self, mock_ollama):
         """User A never accesses User B's documents in RAG."""
         mock_ollama.return_value = "Project Titan budget is 50 million dollars."
@@ -150,7 +151,7 @@ class TestPhase8RAG(unittest.TestCase):
         self.assertEqual(data_user1["citations"][0]["original_filename"], "project_titan_budget.txt")
         mock_ollama.assert_called_once()
 
-    @patch("app.services.rag_service.call_ollama_chat")
+    @patch("app.services.rag_service.call_llm_chat")
     def test_03_retrieval_context_construction(self, mock_ollama):
         """Verify prompt construction wraps document chunks within untrusted context tags."""
         mock_ollama.return_value = "Jupiter has 95 known moons."
@@ -179,7 +180,7 @@ class TestPhase8RAG(unittest.TestCase):
         self.assertIn("[END OF DOCUMENT CONTEXT]", user_msg)
         self.assertIn("User Question: How many moons does Jupiter have?", user_msg)
 
-    @patch("app.services.rag_service.call_ollama_chat")
+    @patch("app.services.rag_service.call_llm_chat")
     def test_04_relevant_context_passed_to_llm(self, mock_ollama):
         """Only relevant chunks are included in LLM context."""
         mock_ollama.return_value = "Chlorophyll absorbs light in the blue and red wavelengths."
@@ -205,7 +206,7 @@ class TestPhase8RAG(unittest.TestCase):
         self.assertIn("Chlorophyll", user_msg)
         self.assertNotIn("Internal combustion engines", user_msg)
 
-    @patch("app.services.rag_service.call_ollama_chat")
+    @patch("app.services.rag_service.call_llm_chat")
     def test_05_programmatic_citations_generation(self, mock_ollama):
         """Citations are derived deterministically from retrieved database records."""
         mock_ollama.return_value = "Answer with completely invented citations that should be ignored."
@@ -227,7 +228,7 @@ class TestPhase8RAG(unittest.TestCase):
         self.assertEqual(citations[0]["original_filename"], "reference_doc.txt")
         self.assertIn("indexing algorithms", citations[0]["snippet"])
 
-    @patch("app.services.rag_service.call_ollama_chat")
+    @patch("app.services.rag_service.call_llm_chat")
     def test_06_no_relevant_chunks_returns_not_found_without_llm(self, mock_ollama):
         """Queries with no qualifying chunks return 'not found' immediately without calling LLM."""
         self._upload_file(
@@ -316,7 +317,7 @@ class TestPhase8RAG(unittest.TestCase):
             "test_network.txt",
             "Network connection testing content for service availability check.",
         )
-        with patch("app.services.rag_service.call_ollama_chat", side_effect=HTTPException(status_code=503, detail="Ollama service is unavailable. Please ensure local Ollama is running.")):
+        with patch("app.services.rag_service.call_llm_chat", side_effect=HTTPException(status_code=503, detail="Ollama service is unavailable. Please ensure local Ollama is running.")):
             res = self.client.post(
                 "/api/v1/rag/ask",
                 json={"question": "network connection testing", "top_k": 3},
@@ -344,7 +345,7 @@ class TestPhase8RAG(unittest.TestCase):
             "test_timeout.txt",
             "Timeout testing content for Ollama gateway response check.",
         )
-        with patch("app.services.rag_service.call_ollama_chat", side_effect=HTTPException(status_code=504, detail="Ollama request timed out.")):
+        with patch("app.services.rag_service.call_llm_chat", side_effect=HTTPException(status_code=504, detail="Ollama request timed out.")):
             res = self.client.post(
                 "/api/v1/rag/ask",
                 json={"question": "timeout testing content", "top_k": 3},
@@ -375,7 +376,7 @@ class TestPhase8RAG(unittest.TestCase):
             "test_malformed.txt",
             "Testing malformed response handling from Ollama service endpoint.",
         )
-        with patch("app.services.rag_service.call_ollama_chat", side_effect=HTTPException(status_code=502, detail="Unexpected response format from Ollama service.")):
+        with patch("app.services.rag_service.call_llm_chat", side_effect=HTTPException(status_code=502, detail="Unexpected response format from Ollama service.")):
             res = self.client.post(
                 "/api/v1/rag/ask",
                 json={"question": "malformed response handling", "top_k": 3},
@@ -384,7 +385,7 @@ class TestPhase8RAG(unittest.TestCase):
             self.assertEqual(res.status_code, 502)
             self.assertIn("Unexpected response format", res.json()["detail"])
 
-    @patch("app.services.rag_service.call_ollama_chat")
+    @patch("app.services.rag_service.call_llm_chat")
     def test_15_prompt_injection_defense(self, mock_ollama):
         """Malicious prompt injection attempts inside documents are neutralized as untrusted data."""
         mock_ollama.return_value = "Neutralized answer."
@@ -411,7 +412,7 @@ class TestPhase8RAG(unittest.TestCase):
         self.assertIn("Ignore all previous instructions", user_msg)
         self.assertIn("[END OF DOCUMENT CONTEXT]", user_msg)
 
-    @patch("app.services.rag_service.call_ollama_chat")
+    @patch("app.services.rag_service.call_llm_chat")
     def test_16_audit_logging_recorded(self, mock_ollama):
         """RAG query generates an audit log entry with action='rag_query'."""
         mock_ollama.return_value = "Audit verified."
@@ -450,7 +451,7 @@ class TestPhase8RAG(unittest.TestCase):
         )
         self.assertEqual(res.status_code, 401)
 
-    @patch("app.services.rag_service.call_ollama_chat")
+    @patch("app.services.rag_service.call_llm_chat")
     def test_18_no_filesystem_path_leakage(self, mock_ollama):
         """Responses never expose server filesystem paths."""
         mock_ollama.return_value = "The document explains security boundaries."

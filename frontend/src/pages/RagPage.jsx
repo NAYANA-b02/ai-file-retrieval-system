@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import api from '../api/client';
 import { useToast } from '../context/ToastContext';
 import { 
@@ -14,7 +14,9 @@ import {
   HelpCircle,
   ExternalLink,
   Eye,
-  Award
+  Award,
+  Filter,
+  Image as ImageIcon
 } from 'lucide-react';
 import FilePreviewModal from '../components/FilePreviewModal';
 
@@ -26,8 +28,25 @@ export default function RagPage() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
 
+  // Document filter state
+  const [userFiles, setUserFiles] = useState([]);
+  const [selectedFileId, setSelectedFileId] = useState(null);
+
   // File Preview Modal for citation sources
   const [previewFile, setPreviewFile] = useState(null);
+
+  // Fetch user's files for the document filter dropdown
+  useEffect(() => {
+    const fetchFiles = async () => {
+      try {
+        const res = await api.get('/files');
+        setUserFiles(res.data || []);
+      } catch {
+        // Non-blocking: dropdown shows "All Documents" only
+      }
+    };
+    fetchFiles();
+  }, []);
 
   const sampleQuestions = [
     'What are the key findings or topics covered across my documents?',
@@ -43,10 +62,17 @@ export default function RagPage() {
     setError(null);
 
     try {
-      const res = await api.post('/rag/ask', {
+      const payload = {
         question: question.trim(),
         top_k: Number(topK),
-      });
+      };
+
+      // Add file_id filter if a specific document is selected
+      if (selectedFileId) {
+        payload.file_id = Number(selectedFileId);
+      }
+
+      const res = await api.post('/rag/ask', payload);
       setResponse(res.data);
     } catch (err) {
       setError(err.message || 'RAG generation failed.');
@@ -63,6 +89,19 @@ export default function RagPage() {
     } catch {
       setPreviewFile({ id: fileId, original_filename: filename || 'Document' });
     }
+  };
+
+  // Derive selected file name for display
+  const selectedFileName = useMemo(() => {
+    if (!selectedFileId) return null;
+    const file = userFiles.find(f => f.id === Number(selectedFileId));
+    return file?.original_filename || `Document #${selectedFileId}`;
+  }, [selectedFileId, userFiles]);
+
+  // Build the visual image URL (uses session cookie auth via withCredentials)
+  const getVisualUrl = (visual) => {
+    const baseUrl = import.meta.env.VITE_API_BASE_URL || '/api/v1';
+    return `${baseUrl}/files/${visual.file_id}/visuals/${visual.visual_id}`;
   };
 
   return (
@@ -96,37 +135,57 @@ export default function RagPage() {
           </div>
 
           <div className="flex flex-wrap items-center justify-between gap-3 pt-1">
+            {/* Document Filter Dropdown */}
             <div className="flex items-center gap-2 text-xs text-slate-500">
-              <span className="font-semibold">Context Chunks (top_k):</span>
+              <Filter className="w-3.5 h-3.5 text-[#7C3AED]" />
+              <span className="font-semibold text-slate-600">Scope:</span>
               <select
-                value={topK}
-                onChange={(e) => setTopK(e.target.value)}
-                className="bg-[#F8F7FC] border border-[#E2E8F0] text-slate-700 text-xs rounded-xl px-2.5 py-1 focus:outline-none focus:border-[#A78BFA]"
+                value={selectedFileId || ''}
+                onChange={(e) => setSelectedFileId(e.target.value || null)}
+                className="bg-[#F8F7FC] border border-[#E2E8F0] text-slate-700 text-xs rounded-xl px-2.5 py-1.5 focus:outline-none focus:border-[#A78BFA] max-w-[220px] truncate"
               >
-                <option value={3}>3 chunks</option>
-                <option value={5}>5 chunks (Standard)</option>
-                <option value={8}>8 chunks</option>
-                <option value={10}>10 chunks</option>
+                <option value="">All Documents</option>
+                {userFiles.map((file) => (
+                  <option key={file.id} value={file.id}>
+                    {file.original_filename}
+                  </option>
+                ))}
               </select>
             </div>
 
-            <button
-              type="submit"
-              disabled={loading || !question.trim()}
-              className="py-2.5 px-5 bg-[#A78BFA] hover:bg-[#8B5CF6] text-white rounded-2xl text-xs font-bold shadow-subtle hover:shadow-card transition flex items-center gap-2 disabled:opacity-50"
-            >
-              {loading ? (
-                <>
-                  <Loader2 className="w-4 h-4 animate-spin" />
-                  <span>Analyzing...</span>
-                </>
-              ) : (
-                <>
-                  <Send className="w-3.5 h-3.5" />
-                  <span>Generate Grounded Answer</span>
-                </>
-              )}
-            </button>
+            <div className="flex items-center gap-3">
+              <div className="flex items-center gap-2 text-xs text-slate-500">
+                <span className="font-semibold">Context Chunks (top_k):</span>
+                <select
+                  value={topK}
+                  onChange={(e) => setTopK(e.target.value)}
+                  className="bg-[#F8F7FC] border border-[#E2E8F0] text-slate-700 text-xs rounded-xl px-2.5 py-1 focus:outline-none focus:border-[#A78BFA]"
+                >
+                  <option value={3}>3 chunks</option>
+                  <option value={5}>5 chunks (Standard)</option>
+                  <option value={8}>8 chunks</option>
+                  <option value={10}>10 chunks</option>
+                </select>
+              </div>
+
+              <button
+                type="submit"
+                disabled={loading || !question.trim()}
+                className="py-2.5 px-5 bg-[#A78BFA] hover:bg-[#8B5CF6] text-white rounded-2xl text-xs font-bold shadow-subtle hover:shadow-card transition flex items-center gap-2 disabled:opacity-50"
+              >
+                {loading ? (
+                  <>
+                    <Loader2 className="w-4 h-4 animate-spin" />
+                    <span>Analyzing...</span>
+                  </>
+                ) : (
+                  <>
+                    <Send className="w-3.5 h-3.5" />
+                    <span>Generate Grounded Answer</span>
+                  </>
+                )}
+              </button>
+            </div>
           </div>
         </form>
 
@@ -170,6 +229,9 @@ export default function RagPage() {
             </h2>
             <p className="text-xs text-slate-500 mt-1">
               Retrieving relevant context and generating a strictly grounded answer.
+              {selectedFileName && (
+                <span className="text-[#7C3AED] font-semibold"> (Scoped to "{selectedFileName}")</span>
+              )}
             </p>
           </div>
 
@@ -193,6 +255,67 @@ export default function RagPage() {
       {/* Answer Area */}
       {response && !loading && (
         <div className="space-y-5 animate-fade-in">
+
+          {/* Document Visual Card (if the RAG found an original diagram/visual) */}
+          {response.visuals && response.visuals.length > 0 && (
+            <div className="bg-white border border-[#E2E8F0] rounded-3xl p-5 sm:p-6 shadow-subtle space-y-4">
+              <div className="flex items-center gap-2.5 pb-3 border-b border-slate-100">
+                <div className="w-8 h-8 rounded-xl bg-[#FEF3C7] text-[#D97706] flex items-center justify-center">
+                  <ImageIcon className="w-4 h-4" />
+                </div>
+                <div>
+                  <h2 className="text-xs font-bold text-slate-800 uppercase tracking-wider">
+                    Original Document Visual
+                  </h2>
+                  <p className="text-[11px] text-slate-400">
+                    Extracted directly from your uploaded document — not AI generated
+                  </p>
+                </div>
+              </div>
+
+              {response.visuals.map((visual, idx) => (
+                <div key={idx} className="space-y-3">
+                  {/* Visual image displayed securely via authenticated endpoint */}
+                  <div className="rounded-2xl border border-[#E2E8F0] overflow-hidden bg-[#F8F7FC]">
+                    <img
+                      src={getVisualUrl(visual)}
+                      alt={visual.caption || `Document visual from ${visual.original_filename}`}
+                      className="w-full h-auto max-h-[500px] object-contain"
+                      loading="lazy"
+                      crossOrigin="use-credentials"
+                      onError={(e) => {
+                        e.target.style.display = 'none';
+                        e.target.nextSibling && (e.target.nextSibling.style.display = 'flex');
+                      }}
+                    />
+                    <div className="hidden items-center justify-center p-8 text-slate-400 text-xs">
+                      <AlertCircle className="w-4 h-4 mr-2" />
+                      Unable to load visual
+                    </div>
+                  </div>
+
+                  {/* Visual metadata */}
+                  <div className="flex flex-wrap items-center gap-3 text-[11px] text-slate-500">
+                    <span className="inline-flex items-center gap-1 bg-[#FEF3C7] text-[#92400E] px-2 py-0.5 rounded-lg font-bold">
+                      <ImageIcon className="w-3 h-3" />
+                      {visual.visual_type === 'page_render' ? 'Page Render' : visual.visual_type === 'embedded_image' ? 'Embedded Image' : 'Image'}
+                    </span>
+                    <span className="flex items-center gap-1">
+                      <FileText className="w-3 h-3" />
+                      {visual.original_filename}
+                    </span>
+                    {visual.page_number && (
+                      <span>Page {visual.page_number}</span>
+                    )}
+                    {visual.caption && (
+                      <span className="italic text-slate-400">"{visual.caption}"</span>
+                    )}
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+
           {/* Answer Card */}
           <div className="bg-white border border-[#E2E8F0] rounded-3xl p-6 sm:p-7 shadow-subtle space-y-4">
             <div className="flex items-center gap-2.5 pb-4 border-b border-slate-100">
@@ -205,6 +328,9 @@ export default function RagPage() {
                 </h2>
                 <p className="text-[11px] text-slate-400">
                   Synthesized from your document vault
+                  {selectedFileName && (
+                    <span className="text-[#7C3AED] font-semibold ml-1">• Scoped to "{selectedFileName}"</span>
+                  )}
                 </p>
               </div>
             </div>
@@ -248,7 +374,7 @@ export default function RagPage() {
                       </div>
 
                       <p className="text-xs text-slate-600 bg-[#F8F7FC] p-2.5 rounded-xl border border-slate-100 mt-2 line-clamp-3 leading-relaxed">
-                        "{c.text || c.chunk_text || 'Source excerpt'}"
+                        "{c.text || c.chunk_text || c.snippet || 'Source excerpt'}"
                       </p>
                     </div>
 

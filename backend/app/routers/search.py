@@ -23,7 +23,7 @@ router = APIRouter(prefix="/api/v1/search", tags=["Search"])
 
 
 # ---------------------------------------------------------------------------
-# Semantic Search Endpoints (Phase 6 preserved)
+# Semantic Search Endpoints
 # ---------------------------------------------------------------------------
 @router.post(
     "/semantic",
@@ -39,16 +39,17 @@ def semantic_search_post(
     """
     Execute semantic search via JSON body:
     - Requires session authentication
-    - Encodes query via all-MiniLM-L6-v2
+    - Encodes query via FastEmbed
     - Scored by cosine similarity against chunks owned by the current user
-    - Returns top-k most relevant chunks
-    - Never exposes physical server filesystem paths
+    - Optionally restricted to a single file_id
+    - Returns top-k most relevant chunks with highlight ranges
     """
     return execute_semantic_search(
         db=db,
         user_id=current_user.id,
         query=request.query,
         top_k=request.top_k,
+        file_id=request.file_id,
     )
 
 
@@ -61,26 +62,24 @@ def semantic_search_post(
 def semantic_search_get(
     query: str = Query(..., description="Natural language search query"),
     top_k: int = Query(default=5, ge=1, le=50, description="Number of results (1-50)"),
+    file_id: Optional[int] = Query(default=None, description="Optional file ID to restrict search to a single document"),
     current_user: User = Depends(get_current_user),
     db: DBSession = Depends(get_db),
 ):
     """
-    Execute semantic search via query parameters:
-    - Requires session authentication
-    - Encodes query via all-MiniLM-L6-v2
-    - Scored by cosine similarity against chunks owned by the current user
-    - Returns top-k most relevant chunks
+    Execute semantic search via query parameters.
     """
     return execute_semantic_search(
         db=db,
         user_id=current_user.id,
         query=query,
         top_k=top_k,
+        file_id=file_id,
     )
 
 
 # ---------------------------------------------------------------------------
-# Keyword Search Endpoints (Phase 7)
+# Keyword Search Endpoints
 # ---------------------------------------------------------------------------
 @router.post(
     "/keyword",
@@ -97,13 +96,15 @@ def keyword_search_post(
     Execute keyword search via JSON body:
     - Requires session authentication
     - Uses PostgreSQL-native Full-Text Search and exact term matching
-    - Returns top-k most relevant chunks owned exclusively by the user
+    - Optionally restricted to a single file_id
+    - Returns top-k most relevant chunks with keyword highlight ranges
     """
     return execute_keyword_search(
         db=db,
         user_id=current_user.id,
         query=request.query,
         top_k=request.top_k,
+        file_id=request.file_id,
     )
 
 
@@ -116,25 +117,24 @@ def keyword_search_post(
 def keyword_search_get(
     query: str = Query(..., description="Keyword search query"),
     top_k: int = Query(default=5, ge=1, le=50, description="Number of results (1-50)"),
+    file_id: Optional[int] = Query(default=None, description="Optional file ID to restrict search to a single document"),
     current_user: User = Depends(get_current_user),
     db: DBSession = Depends(get_db),
 ):
     """
-    Execute keyword search via query parameters:
-    - Requires session authentication
-    - Uses PostgreSQL-native Full-Text Search and exact term matching
-    - Returns top-k most relevant chunks owned exclusively by the user
+    Execute keyword search via query parameters.
     """
     return execute_keyword_search(
         db=db,
         user_id=current_user.id,
         query=query,
         top_k=top_k,
+        file_id=file_id,
     )
 
 
 # ---------------------------------------------------------------------------
-# Hybrid Search Endpoints (Phase 7)
+# Hybrid Search Endpoints
 # ---------------------------------------------------------------------------
 @router.post(
     "/hybrid",
@@ -152,8 +152,8 @@ def hybrid_search_post(
     - Requires session authentication
     - Combines dense semantic vector similarity and sparse keyword relevance
     - S_hybrid = (W_sem * S_sem_norm) + (W_kw * S_kw_norm)
-    - Default weights: 0.6 semantic, 0.4 keyword
-    - Returns top-k most relevant chunks owned exclusively by the user
+    - Optionally restricted to a single file_id
+    - Returns top-k most relevant chunks with highlight ranges
     """
     return execute_hybrid_search(
         db=db,
@@ -162,6 +162,7 @@ def hybrid_search_post(
         top_k=request.top_k,
         keyword_weight=request.keyword_weight,
         semantic_weight=request.semantic_weight,
+        file_id=request.file_id,
     )
 
 
@@ -174,16 +175,14 @@ def hybrid_search_post(
 def hybrid_search_get(
     query: str = Query(..., description="Search query"),
     top_k: int = Query(default=5, ge=1, le=50, description="Number of results (1-50)"),
+    file_id: Optional[int] = Query(default=None, description="Optional file ID to restrict search to a single document"),
     keyword_weight: Optional[float] = Query(default=None, ge=0.0, le=1.0, description="Keyword weight"),
     semantic_weight: Optional[float] = Query(default=None, ge=0.0, le=1.0, description="Semantic weight"),
     current_user: User = Depends(get_current_user),
     db: DBSession = Depends(get_db),
 ):
     """
-    Execute hybrid search via query parameters:
-    - Requires session authentication
-    - Combines dense semantic vector similarity and sparse keyword relevance
-    - Returns top-k most relevant chunks owned exclusively by the user
+    Execute hybrid search via query parameters.
     """
     return execute_hybrid_search(
         db=db,
@@ -192,6 +191,7 @@ def hybrid_search_get(
         top_k=top_k,
         keyword_weight=keyword_weight,
         semantic_weight=semantic_weight,
+        file_id=file_id,
     )
 
 
@@ -217,4 +217,5 @@ def search_post_alias(
         top_k=request.top_k,
         keyword_weight=request.keyword_weight,
         semantic_weight=request.semantic_weight,
+        file_id=request.file_id,
     )

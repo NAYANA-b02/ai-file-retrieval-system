@@ -34,4 +34,6 @@ def ask_question(
         user_id=current_user.id,
         question=request.question,
         top_k=request.top_k,
+        file_id=request.file_id,
     )
+

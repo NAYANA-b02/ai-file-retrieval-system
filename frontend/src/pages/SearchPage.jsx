@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import api from '../api/client';
 import { useToast } from '../context/ToastContext';
@@ -14,9 +14,58 @@ import {
   AlertCircle, 
   Layers, 
   Award,
-  Hash
+  Hash,
+  Filter
 } from 'lucide-react';
 import FilePreviewModal from '../components/FilePreviewModal';
+
+/**
+ * Renders chunk text with highlighted spans using backend-computed highlight_ranges.
+ * No dangerouslySetInnerHTML — purely safe React elements.
+ */
+function HighlightedText({ text, highlightRanges }) {
+  if (!text) return <span className="text-slate-500 italic">No text snippet available.</span>;
+  if (!highlightRanges || highlightRanges.length === 0) {
+    return <span>{text}</span>;
+  }
+
+  // Sort ranges by start position and merge overlapping
+  const sorted = [...highlightRanges].sort((a, b) => a.start - b.start);
+  const merged = [];
+  for (const range of sorted) {
+    if (range.start >= text.length) continue;
+    const clamped = { start: Math.max(0, range.start), end: Math.min(text.length, range.end), type: range.type };
+    if (merged.length > 0 && clamped.start <= merged[merged.length - 1].end) {
+      merged[merged.length - 1].end = Math.max(merged[merged.length - 1].end, clamped.end);
+      // Prefer 'semantic' type if either is semantic
+      if (clamped.type === 'semantic') merged[merged.length - 1].type = 'semantic';
+    } else {
+      merged.push({ ...clamped });
+    }
+  }
+
+  const parts = [];
+  let cursor = 0;
+  merged.forEach((range, i) => {
+    if (cursor < range.start) {
+      parts.push(<span key={`t-${i}`}>{text.slice(cursor, range.start)}</span>);
+    }
+    const highlightClass = range.type === 'semantic'
+      ? 'bg-[#DDD6FE] text-[#5B21B6] rounded-sm px-0.5 font-semibold'
+      : 'bg-[#FDE68A] text-[#92400E] rounded-sm px-0.5 font-semibold';
+    parts.push(
+      <mark key={`h-${i}`} className={highlightClass}>
+        {text.slice(range.start, range.end)}
+      </mark>
+    );
+    cursor = range.end;
+  });
+  if (cursor < text.length) {
+    parts.push(<span key="tail">{text.slice(cursor)}</span>);
+  }
+
+  return <>{parts}</>;
+}
 
 export default function SearchPage() {
   const { showError, showSuccess } = useToast();
@@ -33,8 +82,25 @@ export default function SearchPage() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
 
+  // Document filter state
+  const [userFiles, setUserFiles] = useState([]);
+  const [selectedFileId, setSelectedFileId] = useState(null); // null = All Documents
+
   // File Preview Modal
   const [previewFile, setPreviewFile] = useState(null);
+
+  // Fetch user's files for the document filter dropdown
+  useEffect(() => {
+    const fetchFiles = async () => {
+      try {
+        const res = await api.get('/files');
+        setUserFiles(res.data || []);
+      } catch {
+        // Non-blocking: dropdown shows "All Documents" only
+      }
+    };
+    fetchFiles();
+  }, []);
 
   const executeSearch = async (searchQuery, mode = searchMode) => {
     if (!searchQuery.trim()) return;
@@ -48,6 +114,11 @@ export default function SearchPage() {
         query: searchQuery.trim(),
         top_k: Number(topK),
       };
+
+      // Add file_id filter if a specific document is selected
+      if (selectedFileId) {
+        payload.file_id = Number(selectedFileId);
+      }
 
       if (mode === 'semantic') {
         endpoint = '/search/semantic';
@@ -103,6 +174,13 @@ export default function SearchPage() {
     setSemanticWeight(sw);
     setKeywordWeight(parseFloat((1.0 - sw).toFixed(2)));
   };
+
+  // Derive selected file name for display
+  const selectedFileName = useMemo(() => {
+    if (!selectedFileId) return null;
+    const file = userFiles.find(f => f.id === Number(selectedFileId));
+    return file?.original_filename || `Document #${selectedFileId}`;
+  }, [selectedFileId, userFiles]);
 
   return (
     <div className="max-w-4xl mx-auto space-y-7">
@@ -207,9 +285,45 @@ export default function SearchPage() {
             </button>
           </div>
 
+          {/* Document Filter & Search Parameters */}
+          <div className="pt-3 border-t border-slate-100 flex flex-wrap items-center justify-between gap-4 text-xs">
+            {/* Document Filter Dropdown */}
+            <div className="flex items-center gap-2">
+              <Filter className="w-3.5 h-3.5 text-[#7C3AED]" />
+              <span className="font-semibold text-slate-600">Scope:</span>
+              <select
+                value={selectedFileId || ''}
+                onChange={(e) => setSelectedFileId(e.target.value || null)}
+                className="bg-[#F8F7FC] border border-[#E2E8F0] text-slate-700 text-xs rounded-xl px-2.5 py-1.5 focus:outline-none focus:border-[#A78BFA] max-w-[220px] truncate"
+              >
+                <option value="">All Documents</option>
+                {userFiles.map((file) => (
+                  <option key={file.id} value={file.id}>
+                    {file.original_filename}
+                  </option>
+                ))}
+              </select>
+            </div>
+
+            {/* Results count selector */}
+            <div className="flex items-center gap-2">
+              <span className="font-semibold text-slate-600">Results:</span>
+              <select
+                value={topK}
+                onChange={(e) => setTopK(e.target.value)}
+                className="bg-[#F8F7FC] border border-[#E2E8F0] text-slate-700 text-xs rounded-xl px-2.5 py-1 focus:outline-none focus:border-[#A78BFA]"
+              >
+                <option value={3}>Top 3</option>
+                <option value={5}>Top 5</option>
+                <option value={8}>Top 8</option>
+                <option value={10}>Top 10</option>
+              </select>
+            </div>
+          </div>
+
           {/* Configuration drawer for Hybrid parameters */}
           {searchMode === 'hybrid' && (
-            <div className="pt-3 border-t border-slate-100 flex flex-wrap items-center justify-between gap-4 text-xs">
+            <div className="flex flex-wrap items-center gap-4 text-xs">
               <div className="flex items-center gap-3">
                 <span className="font-semibold text-slate-600">Balance:</span>
                 <span className="text-[11px] font-bold text-[#7C3AED] bg-[#EDE9FE] px-2 py-0.5 rounded-md">
@@ -227,20 +341,6 @@ export default function SearchPage() {
                 <span className="text-[11px] font-bold text-[#2563EB] bg-[#EFF6FF] px-2 py-0.5 rounded-md">
                   {Math.round(keywordWeight * 100)}% Keyword
                 </span>
-              </div>
-
-              <div className="flex items-center gap-2">
-                <span className="font-semibold text-slate-600">Results:</span>
-                <select
-                  value={topK}
-                  onChange={(e) => setTopK(e.target.value)}
-                  className="bg-[#F8F7FC] border border-[#E2E8F0] text-slate-700 text-xs rounded-xl px-2.5 py-1 focus:outline-none focus:border-[#A78BFA]"
-                >
-                  <option value={3}>Top 3</option>
-                  <option value={5}>Top 5</option>
-                  <option value={8}>Top 8</option>
-                  <option value={10}>Top 10</option>
-                </select>
               </div>
             </div>
           )}
@@ -260,6 +360,11 @@ export default function SearchPage() {
           <div className="flex items-center justify-between text-xs text-slate-500 px-1">
             <span className="font-semibold">
               Found {results.results?.length || 0} matching excerpt{(results.results?.length || 0) === 1 ? '' : 's'}
+              {selectedFileName && (
+                <span className="ml-1 text-[#7C3AED]">
+                  in "{selectedFileName}"
+                </span>
+              )}
             </span>
             <span className="font-mono text-[11px] bg-white border border-[#E2E8F0] px-2.5 py-1 rounded-lg">
               Mode: {results.search_mode || searchMode}
@@ -326,12 +431,33 @@ export default function SearchPage() {
                       </div>
                     </div>
 
-                    {/* Excerpt Body */}
+                    {/* Excerpt Body with Highlighted Text */}
                     <div className="p-3.5 rounded-2xl bg-[#F8F7FC] border border-[#E2E8F0] text-xs text-slate-700 font-sans leading-relaxed selection:bg-[#EDE9FE]">
-                      <p className="whitespace-pre-wrap line-clamp-4">
-                        {item.chunk_text || item.text || 'No text snippet available.'}
+                      <p className="whitespace-pre-wrap line-clamp-6">
+                        <HighlightedText
+                          text={item.chunk_text || item.text || ''}
+                          highlightRanges={item.highlight_ranges}
+                        />
                       </p>
                     </div>
+
+                    {/* Highlight Legend (only if highlights exist) */}
+                    {item.highlight_ranges && item.highlight_ranges.length > 0 && (
+                      <div className="flex items-center gap-3 text-[10px] text-slate-400">
+                        {item.highlight_ranges.some(h => h.type === 'keyword') && (
+                          <span className="flex items-center gap-1">
+                            <span className="inline-block w-2.5 h-2.5 rounded-sm bg-[#FDE68A]" />
+                            Keyword match
+                          </span>
+                        )}
+                        {item.highlight_ranges.some(h => h.type === 'semantic') && (
+                          <span className="flex items-center gap-1">
+                            <span className="inline-block w-2.5 h-2.5 rounded-sm bg-[#DDD6FE]" />
+                            Semantic match
+                          </span>
+                        )}
+                      </div>
+                    )}
 
                     {/* Metadata footer */}
                     <div className="flex items-center gap-2 text-[11px] text-slate-400">
