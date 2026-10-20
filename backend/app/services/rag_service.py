@@ -69,13 +69,34 @@ def execute_rag(
                 detail="Document not found or access denied",
             )
 
-    # 3. Visual / Diagram Retrieval if visual intent is detected
+    # 3. Hybrid Retrieval restricted to user-owned files (and single file if file_id provided)
+    search_response = execute_hybrid_search(
+        db=db,
+        user_id=user_id,
+        query=clean_question,
+        top_k=top_k,
+        file_id=file_id,
+    )
+
+    # 4. Filter by similarity threshold
+    qualifying_chunks = [
+        item for item in search_response.results
+        if item.similarity_score >= settings.RAG_SIMILARITY_THRESHOLD
+    ]
+
+    active_model = settings.GROQ_MODEL if settings.LLM_PROVIDER == "groq" else settings.OLLAMA_MODEL
+
+    # 5. Visual / Diagram Retrieval if visual intent is detected
+    #    Runs AFTER hybrid search so qualifying_chunks can improve visual matching.
+    has_visual_intent = detect_visual_intent(clean_question)
     visuals: Optional[List[VisualItem]] = None
-    if detect_visual_intent(clean_question):
+
+    if has_visual_intent:
         relevant_visual = find_relevant_visual(
             db=db,
             user_id=user_id,
             query=clean_question,
+            qualifying_chunks=qualifying_chunks if qualifying_chunks else None,
             file_id=file_id,
         )
         if relevant_visual:
@@ -96,50 +117,63 @@ def execute_rag(
                 )
             ]
 
-    # 4. Hybrid Retrieval restricted to user-owned files (and single file if file_id provided)
-    search_response = execute_hybrid_search(
-        db=db,
-        user_id=user_id,
-        query=clean_question,
-        top_k=top_k,
-        file_id=file_id,
-    )
+    # 6. Handle visual-intent queries: return a truthful introductory answer
+    #    with the visual attached instead of sending to LLM (which cannot
+    #    interpret images from text chunks and would emit the rejection string).
+    if has_visual_intent and visuals:
+        visual_desc = f"I found and retrieved the relevant original visual from '{visuals[0].original_filename}'"
+        if visuals[0].page_number:
+            visual_desc += f" (Page {visuals[0].page_number})"
+        visual_desc += ". The extracted document visual is displayed above."
+        if visuals[0].caption:
+            visual_desc += f" Caption: \"{visuals[0].caption}\"."
 
-    # 5. Filter by similarity threshold
-    qualifying_chunks = [
-        item for item in search_response.results
-        if item.similarity_score >= settings.RAG_SIMILARITY_THRESHOLD
-    ]
+        log_audit(
+            db=db,
+            user_id=user_id,
+            action="rag_query",
+            query=clean_question,
+            details=f"RAG query: top_k={top_k}, file_id={file_id}, chunks={len(qualifying_chunks)}, visuals={len(visuals)}, visual_intent=true",
+        )
 
-    active_model = settings.GROQ_MODEL if settings.LLM_PROVIDER == "groq" else settings.OLLAMA_MODEL
+        # Include citations from qualifying chunks if they exist (document context is still useful)
+        citations: List[CitationItem] = []
+        for item in qualifying_chunks:
+            snippet = item.chunk_text[:200] + ("..." if len(item.chunk_text) > 200 else "")
+            citations.append(
+                CitationItem(
+                    file_id=item.file_id,
+                    original_filename=item.original_filename,
+                    chunk_id=item.chunk_id,
+                    chunk_index=item.chunk_index,
+                    similarity_score=item.similarity_score,
+                    snippet=snippet,
+                )
+            )
 
-    # If no qualifying chunks, check if we found a visual or return grounded no-info answer
+        return RAGAnswerResponse(
+            question=clean_question,
+            answer=visual_desc,
+            citations=citations,
+            visuals=visuals,
+            file_id=file_id,
+            retrieval_metadata={
+                "retrieved_chunks": len(citations),
+                "retrieved_visuals": len(visuals),
+                "threshold": settings.RAG_SIMILARITY_THRESHOLD,
+                "model": active_model,
+            },
+        )
+
+    # 7. No qualifying chunks and no visual: return grounded no-info answer without calling LLM
     if not qualifying_chunks:
         log_audit(
             db=db,
             user_id=user_id,
             action="rag_query",
             query=clean_question,
-            details=f"RAG query: top_k={top_k}, file_id={file_id}, chunks=0, visuals={len(visuals) if visuals else 0}",
+            details=f"RAG query: top_k={top_k}, file_id={file_id}, chunks=0, visuals=0",
         )
-        if visuals:
-            visual_desc = f"I retrieved the relevant original diagram/visual from '{visuals[0].original_filename}'"
-            if visuals[0].page_number:
-                visual_desc += f" (Page {visuals[0].page_number})"
-            visual_desc += ". You can inspect the original extracted document visual above."
-            return RAGAnswerResponse(
-                question=clean_question,
-                answer=visual_desc,
-                citations=[],
-                visuals=visuals,
-                file_id=file_id,
-                retrieval_metadata={
-                    "retrieved_chunks": 0,
-                    "retrieved_visuals": len(visuals),
-                    "threshold": settings.RAG_SIMILARITY_THRESHOLD,
-                    "model": active_model,
-                },
-            )
         return RAGAnswerResponse(
             question=clean_question,
             answer=NOT_ENOUGH_INFO_ANSWER,
@@ -154,7 +188,7 @@ def execute_rag(
             },
         )
 
-    # 6. Programmatic Citations generation from database records
+    # 8. Programmatic Citations generation from database records
     citations: List[CitationItem] = []
     for item in qualifying_chunks:
         snippet = item.chunk_text[:200] + ("..." if len(item.chunk_text) > 200 else "")
@@ -169,7 +203,7 @@ def execute_rag(
             )
         )
 
-    # 7. Context Construction with Untrusted-Data Demarcation
+    # 9. Context Construction with Untrusted-Data Demarcation
     context_blocks = []
     for i, item in enumerate(qualifying_chunks, start=1):
         context_blocks.append(
@@ -178,7 +212,7 @@ def execute_rag(
         )
     context_text = "\n\n".join(context_blocks)
 
-    # 8. Prompt Grounding & Prompt-Injection Defense Instructions
+    # 10. Prompt Grounding & Prompt-Injection Defense Instructions
     system_prompt = (
         "You are a precise, grounded document retrieval assistant.\n"
         "Your strict instructions:\n"
@@ -192,18 +226,10 @@ def execute_rag(
         "8. Keep your answer concise, truthful, and directly relevant."
     )
 
-    visual_context = ""
-    if visuals:
-        visual_context = (
-            f"\n[NOTE: An original visual/diagram from '{visuals[0].original_filename}' "
-            f"(Page {visuals[0].page_number or 'N/A'}) was located and presented directly to the user.]\n"
-        )
-
     user_message = (
         f"[DOCUMENT CONTEXT]\n"
         f"{context_text}\n"
-        f"[END OF DOCUMENT CONTEXT]\n"
-        f"{visual_context}\n"
+        f"[END OF DOCUMENT CONTEXT]\n\n"
         f"User Question: {clean_question}\n\n"
         f"Answer:"
     )
@@ -213,27 +239,27 @@ def execute_rag(
         {"role": "user", "content": user_message},
     ]
 
-    # 9. Call LLM (dispatches to configured provider: Ollama / Groq)
+    # 11. Call LLM (dispatches to configured provider: Ollama / Groq)
     answer = call_llm_chat(messages)
 
-    # 10. Audit Logging
+    # 12. Audit Logging
     log_audit(
         db=db,
         user_id=user_id,
         action="rag_query",
         query=clean_question,
-        details=f"RAG query: top_k={top_k}, file_id={file_id}, chunks={len(citations)}, visuals={len(visuals) if visuals else 0}, status=success",
+        details=f"RAG query: top_k={top_k}, file_id={file_id}, chunks={len(citations)}, visuals=0, status=success",
     )
 
     return RAGAnswerResponse(
         question=clean_question,
         answer=answer,
         citations=citations,
-        visuals=visuals,
+        visuals=None,
         file_id=file_id,
         retrieval_metadata={
             "retrieved_chunks": len(citations),
-            "retrieved_visuals": len(visuals) if visuals else 0,
+            "retrieved_visuals": 0,
             "threshold": settings.RAG_SIMILARITY_THRESHOLD,
             "model": active_model,
         },

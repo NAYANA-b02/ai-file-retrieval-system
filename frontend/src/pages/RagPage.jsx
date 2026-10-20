@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useCallback } from 'react';
 import api from '../api/client';
 import { useToast } from '../context/ToastContext';
 import { 
@@ -19,6 +19,86 @@ import {
   Image as ImageIcon
 } from 'lucide-react';
 import FilePreviewModal from '../components/FilePreviewModal';
+
+/**
+ * Loads a protected visual image via the authenticated Axios client,
+ * using responseType: 'blob' and URL.createObjectURL — the same pattern
+ * used by FilePreviewModal for authenticated file previews.
+ */
+function AuthenticatedVisual({ visual }) {
+  const [blobUrl, setBlobUrl] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(false);
+
+  useEffect(() => {
+    let active = true;
+    let currentBlobUrl = null;
+
+    const loadVisual = async () => {
+      setLoading(true);
+      setError(false);
+
+      try {
+        const res = await api.get(
+          `/files/${visual.file_id}/visuals/${visual.visual_id}`,
+          { responseType: 'blob' }
+        );
+        if (!active) return;
+        currentBlobUrl = URL.createObjectURL(res.data);
+        setBlobUrl(currentBlobUrl);
+      } catch {
+        if (!active) return;
+        setError(true);
+      } finally {
+        if (active) setLoading(false);
+      }
+    };
+
+    loadVisual();
+
+    return () => {
+      active = false;
+      if (currentBlobUrl) {
+        URL.revokeObjectURL(currentBlobUrl);
+      }
+    };
+  }, [visual.file_id, visual.visual_id]);
+
+  // Revoke previous blob URL when a new one is set
+  useEffect(() => {
+    return () => {
+      if (blobUrl) {
+        URL.revokeObjectURL(blobUrl);
+      }
+    };
+  }, [blobUrl]);
+
+  if (loading) {
+    return (
+      <div className="flex items-center justify-center p-12 text-slate-400 text-xs">
+        <Loader2 className="w-5 h-5 animate-spin mr-2" />
+        Loading visual...
+      </div>
+    );
+  }
+
+  if (error || !blobUrl) {
+    return (
+      <div className="flex items-center justify-center p-8 text-slate-400 text-xs">
+        <AlertCircle className="w-4 h-4 mr-2" />
+        Unable to load visual
+      </div>
+    );
+  }
+
+  return (
+    <img
+      src={blobUrl}
+      alt={visual.caption || `Document visual from ${visual.original_filename}`}
+      className="w-full h-auto max-h-[500px] object-contain"
+    />
+  );
+}
 
 export default function RagPage() {
   const { showError } = useToast();
@@ -97,12 +177,6 @@ export default function RagPage() {
     const file = userFiles.find(f => f.id === Number(selectedFileId));
     return file?.original_filename || `Document #${selectedFileId}`;
   }, [selectedFileId, userFiles]);
-
-  // Build the visual image URL (uses session cookie auth via withCredentials)
-  const getVisualUrl = (visual) => {
-    const baseUrl = import.meta.env.VITE_API_BASE_URL || '/api/v1';
-    return `${baseUrl}/files/${visual.file_id}/visuals/${visual.visual_id}`;
-  };
 
   return (
     <div className="max-w-4xl mx-auto space-y-7">
@@ -275,23 +349,9 @@ export default function RagPage() {
 
               {response.visuals.map((visual, idx) => (
                 <div key={idx} className="space-y-3">
-                  {/* Visual image displayed securely via authenticated endpoint */}
+                  {/* Visual image loaded securely via authenticated blob fetch */}
                   <div className="rounded-2xl border border-[#E2E8F0] overflow-hidden bg-[#F8F7FC]">
-                    <img
-                      src={getVisualUrl(visual)}
-                      alt={visual.caption || `Document visual from ${visual.original_filename}`}
-                      className="w-full h-auto max-h-[500px] object-contain"
-                      loading="lazy"
-                      crossOrigin="use-credentials"
-                      onError={(e) => {
-                        e.target.style.display = 'none';
-                        e.target.nextSibling && (e.target.nextSibling.style.display = 'flex');
-                      }}
-                    />
-                    <div className="hidden items-center justify-center p-8 text-slate-400 text-xs">
-                      <AlertCircle className="w-4 h-4 mr-2" />
-                      Unable to load visual
-                    </div>
+                    <AuthenticatedVisual visual={visual} />
                   </div>
 
                   {/* Visual metadata */}
@@ -409,3 +469,4 @@ export default function RagPage() {
     </div>
   );
 }
+
