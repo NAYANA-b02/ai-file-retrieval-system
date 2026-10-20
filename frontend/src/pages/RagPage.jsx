@@ -103,10 +103,16 @@ function AuthenticatedVisual({ visual }) {
 export default function RagPage() {
   const { showError } = useToast();
   const [question, setQuestion] = useState('');
+  const [lastQuestion, setLastQuestion] = useState('');
   const [topK, setTopK] = useState(5);
   const [response, setResponse] = useState(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
+
+  // Candidate progression state
+  const [excludedVisualIds, setExcludedVisualIds] = useState([]);
+  const [confirmedVisualId, setConfirmedVisualId] = useState(null);
+  const [navigatingCandidate, setNavigatingCandidate] = useState(false);
 
   // Document filter state
   const [userFiles, setUserFiles] = useState([]);
@@ -134,16 +140,63 @@ export default function RagPage() {
     'What dates and deadlines are referenced in the uploaded files?',
   ];
 
-  const handleAsk = async (e) => {
-    e?.preventDefault();
-    if (!question.trim()) return;
+  const handleNextCandidate = async (currentExcluded = excludedVisualIds) => {
+    if (!response || !response.visuals || response.visuals.length === 0) return;
+    const currentVis = response.visuals[0];
+    const updatedExcluded = currentExcluded.includes(currentVis.visual_id)
+      ? currentExcluded
+      : [...currentExcluded, currentVis.visual_id];
 
-    setLoading(true);
+    setExcludedVisualIds(updatedExcluded);
+    setConfirmedVisualId(null);
+    setNavigatingCandidate(true);
     setError(null);
 
     try {
       const payload = {
-        question: question.trim(),
+        question: lastQuestion || question.trim(),
+        top_k: Number(topK),
+        exclude_visual_ids: updatedExcluded,
+      };
+      if (selectedFileId) {
+        payload.file_id = Number(selectedFileId);
+      }
+      const res = await api.post('/rag/ask', payload);
+      setResponse(res.data);
+    } catch (err) {
+      setError(err.message || 'Failed loading next candidate diagram.');
+      showError(err.message || 'Failed loading next candidate diagram.');
+    } finally {
+      setNavigatingCandidate(false);
+    }
+  };
+
+  const handleConfirmVisual = () => {
+    if (response?.visuals?.[0]) {
+      setConfirmedVisualId(response.visuals[0].visual_id);
+    }
+  };
+
+  const handleAsk = async (e) => {
+    e?.preventDefault();
+    const cleanQ = question.trim();
+    if (!cleanQ) return;
+
+    // Conversational check: if user asks for "next diagram" or "show another diagram"
+    const isProgressionPrompt = /^(?:no,?\s*)?(?:show\s+(?:the\s+)?next(?:\s+one)?|show\s+another(?:\s+diagram)?|next\s+diagram)$/i.test(cleanQ);
+    if (isProgressionPrompt && response?.visuals && response.visuals.length > 0 && response.has_next_candidate) {
+      return handleNextCandidate();
+    }
+
+    setLoading(true);
+    setError(null);
+    setExcludedVisualIds([]);
+    setConfirmedVisualId(null);
+    setLastQuestion(cleanQ);
+
+    try {
+      const payload = {
+        question: cleanQ,
         top_k: Number(topK),
       };
 
@@ -333,22 +386,45 @@ export default function RagPage() {
           {/* Document Visual Card (if the RAG found an original diagram/visual) */}
           {response.visuals && response.visuals.length > 0 && (
             <div className="bg-white border border-[#E2E8F0] rounded-3xl p-5 sm:p-6 shadow-subtle space-y-4">
-              <div className="flex items-center gap-2.5 pb-3 border-b border-slate-100">
-                <div className="w-8 h-8 rounded-xl bg-[#FEF3C7] text-[#D97706] flex items-center justify-center">
-                  <ImageIcon className="w-4 h-4" />
+              <div className="flex flex-wrap items-center justify-between gap-3 pb-3 border-b border-slate-100">
+                <div className="flex items-center gap-2.5">
+                  <div className="w-8 h-8 rounded-xl bg-[#FEF3C7] text-[#D97706] flex items-center justify-center">
+                    <ImageIcon className="w-4 h-4" />
+                  </div>
+                  <div>
+                    <div className="flex items-center gap-2">
+                      <h2 className="text-xs font-bold text-slate-800 uppercase tracking-wider">
+                        Original Document Visual
+                      </h2>
+                      {response.visuals[0].diagram_type && (
+                        <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-[#EDE9FE] text-[#7C3AED]">
+                          {response.visuals[0].diagram_type}
+                        </span>
+                      )}
+                    </div>
+                    <p className="text-[11px] text-slate-400">
+                      Extracted directly from your uploaded document — not AI generated
+                    </p>
+                  </div>
                 </div>
-                <div>
-                  <h2 className="text-xs font-bold text-slate-800 uppercase tracking-wider">
-                    Original Document Visual
-                  </h2>
-                  <p className="text-[11px] text-slate-400">
-                    Extracted directly from your uploaded document — not AI generated
-                  </p>
+
+                {/* Candidate badge or ambiguous warning */}
+                <div className="flex items-center gap-2">
+                  {response.candidate_count > 1 && (
+                    <span className="text-[11px] font-bold px-2.5 py-1 rounded-xl bg-slate-100 text-slate-600 border border-slate-200">
+                      Candidate {(response.candidate_index ?? 0) + 1} of {response.candidate_count}
+                    </span>
+                  )}
+                  {response.visuals[0].confidence === 'low' && (
+                    <span className="text-[10px] font-semibold px-2 py-0.5 rounded-lg bg-amber-50 text-amber-700 border border-amber-200">
+                      Multiple Plausible Diagrams
+                    </span>
+                  )}
                 </div>
               </div>
 
               {response.visuals.map((visual, idx) => (
-                <div key={idx} className="space-y-3">
+                <div key={idx} className="space-y-4">
                   {/* Visual image loaded securely via authenticated blob fetch */}
                   <div className="rounded-2xl border border-[#E2E8F0] overflow-hidden bg-[#F8F7FC]">
                     <AuthenticatedVisual visual={visual} />
@@ -371,6 +447,58 @@ export default function RagPage() {
                       <span className="italic text-slate-400">"{visual.caption}"</span>
                     )}
                   </div>
+
+                  {/* Candidate Disambiguation & Progression Action Bar */}
+                  {confirmedVisualId === visual.visual_id ? (
+                    <div className="flex items-center gap-2 p-3 rounded-2xl bg-[#ECFDF5] border border-[#A7F3D0] text-[#065F46] text-xs font-semibold animate-fade-in">
+                      <CheckCircle2 className="w-4 h-4 text-[#059669] shrink-0" />
+                      <span>Confirmed: You confirmed this diagram is correct.</span>
+                    </div>
+                  ) : (
+                    <div className="flex flex-wrap items-center justify-between gap-3 pt-3 border-t border-slate-100">
+                      <div className="flex items-center gap-2.5">
+                        <button
+                          type="button"
+                          onClick={handleConfirmVisual}
+                          className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl text-xs font-bold bg-[#10B981] hover:bg-[#059669] text-white shadow-subtle hover:shadow transition"
+                        >
+                          <CheckCircle2 className="w-3.5 h-3.5" />
+                          <span>This is correct</span>
+                        </button>
+
+                        {response.has_next_candidate && (
+                          <button
+                            type="button"
+                            onClick={() => handleNextCandidate()}
+                            disabled={navigatingCandidate}
+                            className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl text-xs font-semibold bg-[#F8F7FC] hover:bg-[#EDE9FE] text-slate-700 hover:text-[#7C3AED] border border-[#E2E8F0] hover:border-[#A78BFA] transition disabled:opacity-50"
+                          >
+                            {navigatingCandidate ? (
+                              <>
+                                <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                                <span>Loading next...</span>
+                              </>
+                            ) : (
+                              <>
+                                <Eye className="w-3.5 h-3.5" />
+                                <span>Show another diagram</span>
+                              </>
+                            )}
+                          </button>
+                        )}
+                      </div>
+
+                      {response.has_next_candidate ? (
+                        <span className="text-[11px] text-slate-400 italic">
+                          Click "Show another diagram" if this doesn't match your intent.
+                        </span>
+                      ) : response.candidate_count > 1 ? (
+                        <span className="text-[11px] text-slate-400 italic">
+                          All available candidates displayed.
+                        </span>
+                      ) : null}
+                    </div>
+                  )}
                 </div>
               ))}
             </div>

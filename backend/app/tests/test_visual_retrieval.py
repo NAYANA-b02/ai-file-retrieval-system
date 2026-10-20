@@ -552,5 +552,389 @@ class TestVisualRetrievalRegression(unittest.TestCase):
         self.assertNotIn("storage_path", raw)
 
 
+    # ----------------------------------------------------------------
+    # Meaning-Based Retrieval Tests (Architecture vs Workflow disambiguation)
+    # ----------------------------------------------------------------
+    def test_architecture_query_prefers_architecture_over_workflow(self):
+        """
+        Replicates Final HackNow scenario:
+        Document has two diagrams:
+          - Diagram 0 (Page 1): Solution Workflow
+          - Diagram 1 (Page 2): System Architecture
+        Query asking for 'architecture diagram' MUST return Diagram 1, NOT Diagram 0.
+        """
+        self._upload_file(
+            self.owner_session,
+            "Final_HackNow.txt",
+            "This document presents the hackathon solution workflow on page 1 and the full system architecture diagram on page 2.",
+        )
+
+        db = SessionLocal()
+        try:
+            owner = db.query(User).filter(User.username == self.owner_username).first()
+            file_record = db.query(File).filter(File.owner_id == owner.id).first()
+            file_id = file_record.id
+
+            # Visual 0: Solution Workflow (first in document order)
+            vis_workflow = DocumentVisual(
+                file_id=file_id,
+                visual_index=0,
+                page_number=1,
+                visual_type="embedded_image",
+                storage_path=file_record.file_path,
+                mime_type="image/png",
+                caption="Figure 1: Solution Workflow",
+                context_text="Solution Workflow diagram showing user upload, ingestion pipeline, vectorization step, and answer display stages.",
+            )
+            # Visual 1: System Architecture (second in document order)
+            vis_architecture = DocumentVisual(
+                file_id=file_id,
+                visual_index=1,
+                page_number=2,
+                visual_type="embedded_image",
+                storage_path=file_record.file_path,
+                mime_type="image/png",
+                caption="Figure 2: System Architecture",
+                context_text="System Architecture diagram. React Frontend communicating via REST API with FastAPI Backend, PostgreSQL database, and FastEmbed vector store.",
+            )
+            db.add_all([vis_workflow, vis_architecture])
+            db.commit()
+            db.refresh(vis_workflow)
+            db.refresh(vis_architecture)
+            arch_id = vis_architecture.id
+            workflow_id = vis_workflow.id
+        finally:
+            db.close()
+
+        res = self.client.post(
+            "/api/v1/rag/ask",
+            json={"question": "Show me the system architecture diagram from Final HackNow", "top_k": 5},
+            cookies={settings.SESSION_COOKIE_NAME: self.owner_session},
+        )
+        self.assertEqual(res.status_code, 200)
+        data = res.json()
+
+        self.assertIsNotNone(data["visuals"])
+        self.assertEqual(len(data["visuals"]), 1)
+        selected_vis = data["visuals"][0]
+
+        # MUST select the System Architecture diagram (Visual 1), NOT the Solution Workflow (Visual 0)
+        self.assertEqual(selected_vis["visual_id"], arch_id)
+        self.assertEqual(selected_vis["diagram_type"], "System Architecture")
+        self.assertEqual(selected_vis["page_number"], 2)
+
+    def test_workflow_query_prefers_workflow_over_architecture(self):
+        """
+        In the same document, asking for 'solution workflow' MUST return
+        the Solution Workflow diagram (Visual 0), NOT System Architecture.
+        """
+        self._upload_file(
+            self.owner_session,
+            "Final_HackNow.txt",
+            "This document presents the hackathon solution workflow on page 1 and the full system architecture diagram on page 2.",
+        )
+
+        db = SessionLocal()
+        try:
+            owner = db.query(User).filter(User.username == self.owner_username).first()
+            file_record = db.query(File).filter(File.owner_id == owner.id).first()
+            file_id = file_record.id
+
+            vis_workflow = DocumentVisual(
+                file_id=file_id,
+                visual_index=0,
+                page_number=1,
+                visual_type="embedded_image",
+                storage_path=file_record.file_path,
+                mime_type="image/png",
+                caption="Figure 1: Solution Workflow",
+                context_text="Solution Workflow diagram showing user upload, ingestion pipeline, vectorization step, and answer display stages.",
+            )
+            vis_architecture = DocumentVisual(
+                file_id=file_id,
+                visual_index=1,
+                page_number=2,
+                visual_type="embedded_image",
+                storage_path=file_record.file_path,
+                mime_type="image/png",
+                caption="Figure 2: System Architecture",
+                context_text="System Architecture diagram. React Frontend communicating via REST API with FastAPI Backend, PostgreSQL database, and FastEmbed vector store.",
+            )
+            db.add_all([vis_workflow, vis_architecture])
+            db.commit()
+            db.refresh(vis_workflow)
+            workflow_id = vis_workflow.id
+        finally:
+            db.close()
+
+        res = self.client.post(
+            "/api/v1/rag/ask",
+            json={"question": "Show me the solution workflow diagram", "top_k": 5},
+            cookies={settings.SESSION_COOKIE_NAME: self.owner_session},
+        )
+        self.assertEqual(res.status_code, 200)
+        data = res.json()
+
+        self.assertIsNotNone(data["visuals"])
+        self.assertEqual(len(data["visuals"]), 1)
+        selected_vis = data["visuals"][0]
+
+        # MUST select the Solution Workflow diagram
+        self.assertEqual(selected_vis["visual_id"], workflow_id)
+        self.assertEqual(selected_vis["diagram_type"], "Solution Workflow")
+        self.assertEqual(selected_vis["page_number"], 1)
+
+    def test_multi_document_diagram_selection(self):
+        """
+        When multiple documents contain diagrams (e.g. Doc A has Database Schema,
+        Doc B has System Architecture), the query correctly targets the right document.
+        """
+        self._upload_file(self.owner_session, "Database_Design.txt", "Database design and ER diagram.")
+        self._upload_file(self.owner_session, "Cloud_Architecture.txt", "Cloud microservice system architecture.")
+
+        db = SessionLocal()
+        try:
+            owner = db.query(User).filter(User.username == self.owner_username).first()
+            file_db = db.query(File).filter(File.original_filename == "Database_Design.txt", File.owner_id == owner.id).first()
+            file_arch = db.query(File).filter(File.original_filename == "Cloud_Architecture.txt", File.owner_id == owner.id).first()
+
+            vis_erd = DocumentVisual(
+                file_id=file_db.id,
+                visual_index=0,
+                page_number=1,
+                visual_type="page_render",
+                storage_path=file_db.file_path,
+                mime_type="image/png",
+                caption="Database Schema ERD",
+                context_text="ER diagram showing tables, foreign keys, and relations between users and files.",
+            )
+            vis_cloud = DocumentVisual(
+                file_id=file_arch.id,
+                visual_index=0,
+                page_number=1,
+                visual_type="page_render",
+                storage_path=file_arch.file_path,
+                mime_type="image/png",
+                caption="Cloud System Architecture",
+                context_text="Cloud microservice system architecture diagram with Kubernetes cluster, ingress gateway, and services.",
+            )
+            db.add_all([vis_erd, vis_cloud])
+            db.commit()
+            db.refresh(vis_erd)
+            db.refresh(vis_cloud)
+            erd_id = vis_erd.id
+            cloud_id = vis_cloud.id
+        finally:
+            db.close()
+
+        # Query 1: Ask for Database Schema
+        res1 = self.client.post(
+            "/api/v1/rag/ask",
+            json={"question": "Show me the database schema ER diagram", "top_k": 5},
+            cookies={settings.SESSION_COOKIE_NAME: self.owner_session},
+        )
+        self.assertEqual(res1.status_code, 200)
+        self.assertEqual(res1.json()["visuals"][0]["visual_id"], erd_id)
+
+        # Query 2: Ask for Cloud System Architecture
+        res2 = self.client.post(
+            "/api/v1/rag/ask",
+            json={"question": "Show me the cloud system architecture diagram", "top_k": 5},
+            cookies={settings.SESSION_COOKIE_NAME: self.owner_session},
+        )
+        self.assertEqual(res2.status_code, 200)
+        self.assertEqual(res2.json()["visuals"][0]["visual_id"], cloud_id)
+
+    def test_file_specific_visual_filtering(self):
+        """
+        When file_id is provided in the request, visual retrieval is strictly
+        scoped to that specific document even if other documents have matching visuals.
+        """
+        self._upload_file(self.owner_session, "Doc1.txt", "Architecture for doc 1.")
+        self._upload_file(self.owner_session, "Doc2.txt", "Architecture for doc 2.")
+
+        db = SessionLocal()
+        try:
+            owner = db.query(User).filter(User.username == self.owner_username).first()
+            f1 = db.query(File).filter(File.original_filename == "Doc1.txt", File.owner_id == owner.id).first()
+            f2 = db.query(File).filter(File.original_filename == "Doc2.txt", File.owner_id == owner.id).first()
+
+            v1 = DocumentVisual(
+                file_id=f1.id,
+                visual_index=0,
+                page_number=1,
+                visual_type="page_render",
+                storage_path=f1.file_path,
+                mime_type="image/png",
+                caption="Doc 1 Architecture",
+                context_text="System architecture overview for system 1.",
+            )
+            v2 = DocumentVisual(
+                file_id=f2.id,
+                visual_index=0,
+                page_number=1,
+                visual_type="page_render",
+                storage_path=f2.file_path,
+                mime_type="image/png",
+                caption="Doc 2 Architecture",
+                context_text="System architecture overview for system 2.",
+            )
+            db.add_all([v1, v2])
+            db.commit()
+            db.refresh(v1)
+            v1_id = v1.id
+            f1_id = f1.id
+        finally:
+            db.close()
+
+        # Scope explicitly to Doc 1
+        res = self.client.post(
+            "/api/v1/rag/ask",
+            json={"question": "Show me the architecture diagram", "top_k": 3, "file_id": f1_id},
+            cookies={settings.SESSION_COOKIE_NAME: self.owner_session},
+        )
+        self.assertEqual(res.status_code, 200)
+        data = res.json()
+        self.assertEqual(data["visuals"][0]["visual_id"], v1_id)
+        self.assertEqual(data["visuals"][0]["file_id"], f1_id)
+
+    def test_candidate_progression_and_exhaustion(self):
+        """
+        Verifies:
+        1. First candidate returned with has_next_candidate=True.
+        2. Excluding candidate 1 returns candidate 2.
+        3. Excluding candidate 1 and 2 returns candidate exhaustion message with visuals=None.
+        """
+        self._upload_file(self.owner_session, "MultiDiagram.txt", "Document with multiple diagrams.")
+
+        db = SessionLocal()
+        try:
+            owner = db.query(User).filter(User.username == self.owner_username).first()
+            file_rec = db.query(File).filter(File.owner_id == owner.id).first()
+            f_id = file_rec.id
+
+            v1 = DocumentVisual(
+                file_id=f_id,
+                visual_index=0,
+                page_number=1,
+                visual_type="page_render",
+                storage_path=file_rec.file_path,
+                mime_type="image/png",
+                caption="Figure 1: High Level Architecture",
+                context_text="Architecture diagram high level overview component stack.",
+            )
+            v2 = DocumentVisual(
+                file_id=f_id,
+                visual_index=1,
+                page_number=2,
+                visual_type="page_render",
+                storage_path=file_rec.file_path,
+                mime_type="image/png",
+                caption="Figure 2: Component Architecture",
+                context_text="Component architecture diagram detailing service modules.",
+            )
+            db.add_all([v1, v2])
+            db.commit()
+            db.refresh(v1)
+            db.refresh(v2)
+            v1_id = v1.id
+            v2_id = v2.id
+        finally:
+            db.close()
+
+        # Step 1: Initial query
+        res1 = self.client.post(
+            "/api/v1/rag/ask",
+            json={"question": "Show me the architecture diagram", "top_k": 5},
+            cookies={settings.SESSION_COOKIE_NAME: self.owner_session},
+        )
+        data1 = res1.json()
+        self.assertEqual(res1.status_code, 200)
+        self.assertTrue(data1["has_next_candidate"])
+        self.assertEqual(data1["candidate_count"], 2)
+        first_vis_id = data1["visuals"][0]["visual_id"]
+
+        # Step 2: Show another diagram (exclude first_vis_id)
+        res2 = self.client.post(
+            "/api/v1/rag/ask",
+            json={
+                "question": "Show me the architecture diagram",
+                "top_k": 5,
+                "exclude_visual_ids": [first_vis_id],
+            },
+            cookies={settings.SESSION_COOKIE_NAME: self.owner_session},
+        )
+        data2 = res2.json()
+        self.assertEqual(res2.status_code, 200)
+        second_vis_id = data2["visuals"][0]["visual_id"]
+        self.assertNotEqual(first_vis_id, second_vis_id)
+        self.assertFalse(data2["has_next_candidate"])
+
+        # Step 3: Candidate exhaustion (exclude both)
+        res3 = self.client.post(
+            "/api/v1/rag/ask",
+            json={
+                "question": "Show me the architecture diagram",
+                "top_k": 5,
+                "exclude_visual_ids": [first_vis_id, second_vis_id],
+            },
+            cookies={settings.SESSION_COOKIE_NAME: self.owner_session},
+        )
+        data3 = res3.json()
+        self.assertEqual(res3.status_code, 200)
+        self.assertIsNone(data3["visuals"])
+        self.assertIn("No further relevant diagrams", data3["answer"])
+
+    def test_ordinal_query_selection(self):
+        """
+        When the user explicitly asks for 'the second diagram', the system honors
+        the ordinal and returns candidate 2.
+        """
+        self._upload_file(self.owner_session, "Numbered_Doc.txt", "Numbered diagram document.")
+
+        db = SessionLocal()
+        try:
+            owner = db.query(User).filter(User.username == self.owner_username).first()
+            file_rec = db.query(File).filter(File.owner_id == owner.id).first()
+            f_id = file_rec.id
+
+            v1 = DocumentVisual(
+                file_id=f_id,
+                visual_index=0,
+                page_number=1,
+                visual_type="page_render",
+                storage_path=file_rec.file_path,
+                mime_type="image/png",
+                caption="First Diagram",
+                context_text="First system overview diagram on page 1.",
+            )
+            v2 = DocumentVisual(
+                file_id=f_id,
+                visual_index=1,
+                page_number=2,
+                visual_type="page_render",
+                storage_path=file_rec.file_path,
+                mime_type="image/png",
+                caption="Second Diagram",
+                context_text="Second component diagram on page 2.",
+            )
+            db.add_all([v1, v2])
+            db.commit()
+            db.refresh(v1)
+            db.refresh(v2)
+            v2_id = v2.id
+        finally:
+            db.close()
+
+        res = self.client.post(
+            "/api/v1/rag/ask",
+            json={"question": "Show me the second diagram", "top_k": 5},
+            cookies={settings.SESSION_COOKIE_NAME: self.owner_session},
+        )
+        self.assertEqual(res.status_code, 200)
+        data = res.json()
+        self.assertEqual(data["visuals"][0]["visual_id"], v2_id)
+
+
 if __name__ == "__main__":
     unittest.main()

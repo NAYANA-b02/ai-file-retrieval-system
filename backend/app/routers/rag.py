@@ -35,5 +35,7 @@ def ask_question(
         question=request.question,
         top_k=request.top_k,
         file_id=request.file_id,
+        exclude_visual_ids=request.exclude_visual_ids,
+        visual_candidate_index=request.visual_candidate_index,
     )
 

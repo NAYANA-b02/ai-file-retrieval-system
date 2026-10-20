@@ -8,7 +8,11 @@ from app.models.file import File
 from app.schemas.rag import CitationItem, RAGAnswerResponse, VisualItem
 from app.services.search_service import execute_hybrid_search
 from app.services.llm_service import call_llm_chat
-from app.services.visual_service import detect_visual_intent, find_relevant_visual
+from app.services.visual_service import (
+    detect_visual_intent,
+    find_relevant_visual,
+    find_relevant_visual_candidates,
+)
 from app.services.audit_service import log_audit
 
 logger = logging.getLogger(__name__)
@@ -22,6 +26,8 @@ def execute_rag(
     question: str,
     top_k: int = 5,
     file_id: Optional[int] = None,
+    exclude_visual_ids: Optional[List[int]] = None,
+    visual_candidate_index: Optional[int] = None,
 ) -> RAGAnswerResponse:
     """
     Execute grounded Retrieval-Augmented Generation for the authenticated user.
@@ -89,53 +95,46 @@ def execute_rag(
     # 5. Visual / Diagram Retrieval if visual intent is detected
     #    Runs AFTER hybrid search so qualifying_chunks can improve visual matching.
     has_visual_intent = detect_visual_intent(clean_question)
+    visual_results: Optional[dict] = None
     visuals: Optional[List[VisualItem]] = None
 
     if has_visual_intent:
-        relevant_visual = find_relevant_visual(
+        visual_results = find_relevant_visual_candidates(
             db=db,
             user_id=user_id,
             query=clean_question,
             qualifying_chunks=qualifying_chunks if qualifying_chunks else None,
             file_id=file_id,
+            exclude_visual_ids=exclude_visual_ids,
+            visual_candidate_index=visual_candidate_index,
         )
-        if relevant_visual:
+        selected_vis = visual_results.get("selected_visual")
+        if selected_vis:
             orig_filename = (
-                relevant_visual.file.original_filename
-                if relevant_visual.file
+                selected_vis.file.original_filename
+                if selected_vis.file
                 else "document"
             )
             visuals = [
                 VisualItem(
-                    visual_id=relevant_visual.id,
-                    file_id=relevant_visual.file_id,
+                    visual_id=selected_vis.id,
+                    file_id=selected_vis.file_id,
                     original_filename=orig_filename,
-                    page_number=relevant_visual.page_number,
-                    visual_type=relevant_visual.visual_type,
-                    caption=relevant_visual.caption,
-                    content_url=f"/api/v1/files/{relevant_visual.file_id}/visuals/{relevant_visual.id}",
+                    page_number=selected_vis.page_number,
+                    visual_type=selected_vis.visual_type,
+                    caption=selected_vis.caption,
+                    content_url=f"/api/v1/files/{selected_vis.file_id}/visuals/{selected_vis.id}",
+                    diagram_type=visual_results.get("diagram_type", "Document Visual"),
+                    confidence=visual_results.get("confidence", "high"),
+                    candidate_index=visual_results.get("candidate_index", 0),
+                    total_candidates=visual_results.get("candidate_count", 1),
                 )
             ]
 
     # 6. Handle visual-intent queries: return a truthful introductory answer
     #    with the visual attached instead of sending to LLM (which cannot
     #    interpret images from text chunks and would emit the rejection string).
-    if has_visual_intent and visuals:
-        visual_desc = f"I found and retrieved the relevant original visual from '{visuals[0].original_filename}'"
-        if visuals[0].page_number:
-            visual_desc += f" (Page {visuals[0].page_number})"
-        visual_desc += ". The extracted document visual is displayed above."
-        if visuals[0].caption:
-            visual_desc += f" Caption: \"{visuals[0].caption}\"."
-
-        log_audit(
-            db=db,
-            user_id=user_id,
-            action="rag_query",
-            query=clean_question,
-            details=f"RAG query: top_k={top_k}, file_id={file_id}, chunks={len(qualifying_chunks)}, visuals={len(visuals)}, visual_intent=true",
-        )
-
+    if has_visual_intent:
         # Include citations from qualifying chunks if they exist (document context is still useful)
         citations: List[CitationItem] = []
         for item in qualifying_chunks:
@@ -151,19 +150,99 @@ def execute_rag(
                 )
             )
 
-        return RAGAnswerResponse(
-            question=clean_question,
-            answer=visual_desc,
-            citations=citations,
-            visuals=visuals,
-            file_id=file_id,
-            retrieval_metadata={
-                "retrieved_chunks": len(citations),
-                "retrieved_visuals": len(visuals),
-                "threshold": settings.RAG_SIMILARITY_THRESHOLD,
-                "model": active_model,
-            },
-        )
+        # Case 6A: A visual candidate was found and selected
+        if visuals and visual_results:
+            cand_idx = visual_results.get("candidate_index", 0)
+            cand_count = visual_results.get("candidate_count", 1)
+            confidence = visual_results.get("confidence", "high")
+            diagram_type = visual_results.get("diagram_type", "Document Visual")
+            has_next = visual_results.get("has_next_candidate", False)
+            candidate_ids = visual_results.get("candidate_visual_ids", [])
+            vis = visuals[0]
+
+            if confidence == "high":
+                visual_desc = (
+                    f"I found and retrieved the {diagram_type} diagram from '{vis.original_filename}'"
+                )
+                if vis.page_number:
+                    visual_desc += f" (Page {vis.page_number})"
+                visual_desc += ". The extracted document visual is displayed above."
+                if vis.caption and vis.caption != vis.original_filename:
+                    visual_desc += f' Caption: "{vis.caption}".'
+            else:
+                # Ambiguous / Low confidence: multiple plausible candidates exist
+                visual_desc = (
+                    f"I found multiple candidate diagrams matching your query in '{vis.original_filename}'. "
+                    f"Displaying candidate {cand_idx + 1} of {cand_count}: '{diagram_type}'"
+                )
+                if vis.page_number:
+                    visual_desc += f" (Page {vis.page_number})"
+                visual_desc += (
+                    ". If this is not the intended diagram, use 'Show another diagram' to view alternatives."
+                )
+
+            log_audit(
+                db=db,
+                user_id=user_id,
+                action="rag_query",
+                query=clean_question,
+                details=(
+                    f"RAG query: top_k={top_k}, file_id={file_id}, "
+                    f"chunks={len(qualifying_chunks)}, visuals={len(visuals)}, "
+                    f"diagram_type={diagram_type}, confidence={confidence}, visual_intent=true"
+                ),
+            )
+
+            return RAGAnswerResponse(
+                question=clean_question,
+                answer=visual_desc,
+                citations=citations,
+                visuals=visuals,
+                file_id=file_id,
+                retrieval_metadata={
+                    "retrieved_chunks": len(citations),
+                    "retrieved_visuals": len(visuals),
+                    "threshold": settings.RAG_SIMILARITY_THRESHOLD,
+                    "model": active_model,
+                    "diagram_type": diagram_type,
+                    "confidence": confidence,
+                    "candidate_index": cand_idx,
+                    "candidate_count": cand_count,
+                },
+                has_next_candidate=has_next,
+                candidate_count=cand_count,
+                candidate_index=cand_idx,
+                candidate_visual_ids=candidate_ids,
+            )
+
+        # Case 6B: All candidates were excluded / rejected by the user
+        if visual_results and visual_results.get("all_exhausted"):
+            exhaust_msg = "No further relevant diagrams were found in your documents for this query."
+            log_audit(
+                db=db,
+                user_id=user_id,
+                action="rag_query",
+                query=clean_question,
+                details=f"RAG query: visual candidate exhaustion for query: '{clean_question}'",
+            )
+            return RAGAnswerResponse(
+                question=clean_question,
+                answer=exhaust_msg,
+                citations=citations,
+                visuals=None,
+                file_id=file_id,
+                retrieval_metadata={
+                    "retrieved_chunks": len(citations),
+                    "retrieved_visuals": 0,
+                    "threshold": settings.RAG_SIMILARITY_THRESHOLD,
+                    "model": active_model,
+                    "all_candidates_exhausted": True,
+                },
+                has_next_candidate=False,
+                candidate_count=0,
+                candidate_index=0,
+                candidate_visual_ids=[],
+            )
 
     # 7. No qualifying chunks and no visual: return grounded no-info answer without calling LLM
     if not qualifying_chunks:
